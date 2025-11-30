@@ -197,8 +197,24 @@ class DiamondPrinterPlugin :
                             return@launch
                         }
                         // Ensure bluetoothManager is in clean state
+                        Log.d(TAG, "Cleaning up bluetoothManager before new connection...")
                         bluetoothManager?.disconnect()
                         delay(500) // Wait for disconnect to complete (BluetoothConnectionManager has 500ms sleep)
+                        
+                        // Double-check that it's clean, if not wait more
+                        var retryCount = 0
+                        while (bluetoothManager?.isClean() != true && retryCount < 5) {
+                            Log.w(TAG, "BluetoothManager not clean yet, waiting more... (attempt ${retryCount + 1})")
+                            delay(200)
+                            retryCount++
+                        }
+                        
+                        if (bluetoothManager?.isClean() != true) {
+                            Log.w(TAG, "BluetoothManager still not clean after retries, proceeding anyway...")
+                        } else {
+                            Log.d(TAG, "BluetoothManager is now clean, ready for new connection")
+                        }
+                        
                         bluetoothManager
                     }
                     "wifi" -> {
@@ -232,11 +248,30 @@ class DiamondPrinterPlugin :
     private fun handleDisconnect(result: Result) {
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                // Disconnect and wait for it to complete
+                // Disconnect the connection manager
                 connectionManager?.disconnect()
                 
+                // Always ensure bluetoothManager is clean (it's a singleton, reused across connections)
+                // This is critical because bluetoothManager persists even when connectionManager changes
+                bluetoothManager?.disconnect()
+                
                 // Wait longer to ensure socket is fully closed and resources are released
-                delay(800) // Wait for disconnect to complete (BluetoothConnectionManager has 500ms sleep)
+                delay(1000) // Wait for disconnect to complete (BluetoothConnectionManager has 500ms sleep)
+                
+                // Verify bluetoothManager is clean with retries
+                var retryCount = 0
+                while (bluetoothManager?.isClean() != true && retryCount < 3) {
+                    Log.w(TAG, "BluetoothManager not clean after disconnect, retrying... (attempt ${retryCount + 1})")
+                    bluetoothManager?.disconnect()
+                    delay(500)
+                    retryCount++
+                }
+                
+                if (bluetoothManager?.isClean() != true) {
+                    Log.w(TAG, "BluetoothManager still not clean after retries, but proceeding...")
+                } else {
+                    Log.d(TAG, "BluetoothManager is now clean")
+                }
                 
                 // Now set to null after cleanup is complete
                 connectionManager = null
@@ -247,8 +282,15 @@ class DiamondPrinterPlugin :
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Disconnect error: ${e.message}", e)
-                // Still set to null even on error, but wait a bit first
-                delay(500)
+                // Still try to clean up bluetoothManager
+                try {
+                    bluetoothManager?.disconnect()
+                    delay(500)
+                } catch (e2: Exception) {
+                    Log.e(TAG, "Error cleaning bluetoothManager: ${e2.message}")
+                }
+                // Wait a bit before setting to null
+                delay(1000)
                 connectionManager = null
                 
                 withContext(Dispatchers.Main) {

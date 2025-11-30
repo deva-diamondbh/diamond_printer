@@ -50,16 +50,38 @@ class BluetoothConnectionManager(private val context: Context) : ConnectionManag
             disconnect()
             
             // Double-check that socket is null before proceeding
-            if (bluetoothSocket != null) {
-                Log.w(TAG, "Socket still exists after disconnect, forcing cleanup...")
+            var cleanupRetries = 0
+            while (bluetoothSocket != null && cleanupRetries < 3) {
+                Log.w(TAG, "Socket still exists after disconnect, forcing cleanup... (attempt ${cleanupRetries + 1})")
                 try {
-                    bluetoothSocket?.close()
+                    bluetoothSocket?.let { socket ->
+                        try {
+                            if (socket.isConnected) {
+                                socket.close()
+                                Log.d(TAG, "Force closed connected socket")
+                            } else {
+                                socket.close()
+                                Log.d(TAG, "Force closed unconnected socket")
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Error force closing socket: ${e.message}")
+                        }
+                    }
                 } catch (e: Exception) {
-                    Log.w(TAG, "Error closing socket during cleanup: ${e.message}")
+                    Log.w(TAG, "Error accessing socket during cleanup: ${e.message}")
                 }
                 bluetoothSocket = null
                 outputStream = null
-                Thread.sleep(300) // Additional wait
+                Thread.sleep(400) // Wait longer for each retry
+                cleanupRetries++
+            }
+            
+            if (bluetoothSocket != null) {
+                Log.e(TAG, "WARNING: Socket still exists after cleanup attempts, proceeding anyway")
+                // Force nullify even if close failed
+                bluetoothSocket = null
+                outputStream = null
+                Thread.sleep(500) // Final wait
             }
             
             Log.d(TAG, "Attempting to connect to $address (socket is null: ${bluetoothSocket == null})")
@@ -198,7 +220,20 @@ class BluetoothConnectionManager(private val context: Context) : ConnectionManag
     }
     
     override fun isConnected(): Boolean {
-        return bluetoothSocket?.isConnected == true
+        return try {
+            bluetoothSocket?.isConnected == true
+        } catch (e: Exception) {
+            // If there's an error checking connection, assume not connected
+            Log.w(TAG, "Error checking connection state: ${e.message}")
+            false
+        }
+    }
+    
+    /**
+     * Check if the connection manager is in a clean state (no active socket)
+     */
+    fun isClean(): Boolean {
+        return bluetoothSocket == null && outputStream == null
     }
     
     override fun getOutputStream(): OutputStream? {
