@@ -24,6 +24,7 @@ import io.flutter.plugin.common.MethodChannel.Result
 import io.flutter.plugin.common.PluginRegistry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -177,6 +178,9 @@ class DiamondPrinterPlugin :
                 // Disconnect any existing connection
                 connectionManager?.disconnect()
                 
+                // Wait for socket to fully close before creating new connection
+                delay(500) // 500ms delay to ensure socket is fully closed
+                
                 // Create appropriate connection manager
                 connectionManager = when (type.lowercase()) {
                     "bluetooth" -> {
@@ -221,10 +225,15 @@ class DiamondPrinterPlugin :
     private fun handleDisconnect(result: Result) {
         try {
             connectionManager?.disconnect()
+            // Don't set to null immediately - let the connection manager handle cleanup
+            // Wait a bit to ensure socket is fully closed before allowing new connections
             connectionManager = null
+            Log.d(TAG, "Disconnect handled - connectionManager set to null")
             result.success(null)
         } catch (e: Exception) {
             Log.e(TAG, "Disconnect error: ${e.message}", e)
+            // Still set to null even on error
+            connectionManager = null
             result.error("DISCONNECT_ERROR", e.message, null)
         }
     }

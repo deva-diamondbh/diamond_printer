@@ -135,13 +135,37 @@ class BluetoothConnectionManager(private val context: Context) : ConnectionManag
     
     override fun disconnect() {
         try {
-            outputStream?.close()
-            bluetoothSocket?.close()
+            // Close output stream first
+            outputStream?.let {
+                try {
+                    it.flush()
+                    it.close()
+                    Log.d(TAG, "OutputStream closed")
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error closing output stream: ${e.message}")
+                }
+            }
+            
+            // Close socket with proper cleanup
+            bluetoothSocket?.let { socket ->
+                try {
+                    if (socket.isConnected) {
+                        socket.close()
+                        Log.d(TAG, "Socket closed")
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error closing socket: ${e.message}")
+                }
+            }
+            
+            // Wait a bit to ensure socket is fully closed
+            Thread.sleep(200)
         } catch (e: Exception) {
             Log.e(TAG, "Error during disconnect: ${e.message}")
         } finally {
             outputStream = null
             bluetoothSocket = null
+            Log.d(TAG, "Disconnect complete - socket and stream set to null")
         }
     }
     
