@@ -1,0 +1,28 @@
+PODS:
+  - diamond_printer (0.0.1):
+    - Flutter
+  - Flutter (1.0.0)
+  - integration_test (0.0.1):
+    - Flutter
+
+DEPENDENCIES:
+  - diamond_printer (from `.symlinks/plugins/diamond_printer/ios`)
+  - Flutter (from `Flutter`)
+  - integration_test (from `.symlinks/plugins/integration_test/ios`)
+
+EXTERNAL SOURCES:
+  diamond_printer:
+    :path: ".symlinks/plugins/diamond_printer/ios"
+  Flutter:
+    :path: Flutter
+  integration_test:
+    :path: ".symlinks/plugins/integration_test/ios"
+
+SPEC CHECKSUMS:
+  diamond_printer: 63794a470b8aea1d31ff9cc8e16f0bd9455f654b
+  Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
+  integration_test: 252f60fa39af5e17c3aa9899d35d908a0721b573
+
+PODFILE CHECKSUM: 74933fe05e74da1f3233e761ed04b002f1e8a949
+
+COCOAPODS: 1.16.2
