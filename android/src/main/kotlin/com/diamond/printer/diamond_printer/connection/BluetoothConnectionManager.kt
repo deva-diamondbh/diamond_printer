@@ -49,7 +49,20 @@ class BluetoothConnectionManager(private val context: Context) : ConnectionManag
             // Disconnect any existing connection
             disconnect()
             
-            Log.d(TAG, "Attempting to connect to $address")
+            // Double-check that socket is null before proceeding
+            if (bluetoothSocket != null) {
+                Log.w(TAG, "Socket still exists after disconnect, forcing cleanup...")
+                try {
+                    bluetoothSocket?.close()
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error closing socket during cleanup: ${e.message}")
+                }
+                bluetoothSocket = null
+                outputStream = null
+                Thread.sleep(300) // Additional wait
+            }
+            
+            Log.d(TAG, "Attempting to connect to $address (socket is null: ${bluetoothSocket == null})")
             
             // Get the Bluetooth device
             val device: BluetoothDevice = try {
@@ -83,6 +96,8 @@ class BluetoothConnectionManager(private val context: Context) : ConnectionManag
             } catch (e: Exception) {
                 Log.w(TAG, "Secure connection failed: ${e.message}")
                 disconnect()
+                // Small delay before trying next method
+                Thread.sleep(200)
             }
             
             // Try insecure connection as fallback
@@ -99,6 +114,8 @@ class BluetoothConnectionManager(private val context: Context) : ConnectionManag
             } catch (e: Exception) {
                 Log.w(TAG, "Insecure connection failed: ${e.message}")
                 disconnect()
+                // Small delay before trying next method
+                Thread.sleep(200)
             }
             
             // Try reflection-based connection as last resort (for problematic devices)
@@ -149,20 +166,31 @@ class BluetoothConnectionManager(private val context: Context) : ConnectionManag
             // Close socket with proper cleanup
             bluetoothSocket?.let { socket ->
                 try {
-                    if (socket.isConnected) {
+                    // Check if socket is connected before trying to close
+                    val wasConnected = socket.isConnected
+                    if (wasConnected) {
                         socket.close()
-                        Log.d(TAG, "Socket closed")
+                        Log.d(TAG, "Socket closed (was connected)")
+                    } else {
+                        // Even if not connected, try to close to clean up
+                        try {
+                            socket.close()
+                            Log.d(TAG, "Socket closed (was not connected)")
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Socket already closed or error: ${e.message}")
+                        }
                     }
                 } catch (e: Exception) {
                     Log.w(TAG, "Error closing socket: ${e.message}")
                 }
             }
             
-            // Wait a bit to ensure socket is fully closed
-            Thread.sleep(200)
+            // Wait longer to ensure socket is fully closed and resources are released
+            Thread.sleep(500)
         } catch (e: Exception) {
             Log.e(TAG, "Error during disconnect: ${e.message}")
         } finally {
+            // Always nullify references to ensure clean state
             outputStream = null
             bluetoothSocket = null
             Log.d(TAG, "Disconnect complete - socket and stream set to null")

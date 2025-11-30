@@ -44,13 +44,46 @@ class WiFiConnectionManager : ConnectionManager {
     
     override fun disconnect() {
         try {
-            outputStream?.close()
-            socket?.close()
+            // Close output stream first
+            outputStream?.let {
+                try {
+                    it.flush()
+                    it.close()
+                    Log.d(TAG, "OutputStream closed")
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error closing output stream: ${e.message}")
+                }
+            }
+            
+            // Close socket with proper cleanup
+            socket?.let { sock ->
+                try {
+                    val wasConnected = sock.isConnected
+                    if (wasConnected) {
+                        sock.close()
+                        Log.d(TAG, "Socket closed (was connected)")
+                    } else {
+                        try {
+                            sock.close()
+                            Log.d(TAG, "Socket closed (was not connected)")
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Socket already closed or error: ${e.message}")
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error closing socket: ${e.message}")
+                }
+            }
+            
+            // Small delay to ensure socket is fully closed (WiFi sockets are usually faster)
+            Thread.sleep(200)
         } catch (e: Exception) {
             Log.e(TAG, "Error during disconnect: ${e.message}")
         } finally {
+            // Always nullify references to ensure clean state
             outputStream = null
             socket = null
+            Log.d(TAG, "Disconnect complete - socket and stream set to null")
         }
     }
     

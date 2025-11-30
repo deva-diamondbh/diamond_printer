@@ -178,8 +178,8 @@ class DiamondPrinterPlugin :
                 // Disconnect any existing connection
                 connectionManager?.disconnect()
                 
-                // Wait for socket to fully close before creating new connection
-                delay(500) // 500ms delay to ensure socket is fully closed
+                // Wait longer for socket to fully close and resources to be released
+                delay(1000) // 1 second delay to ensure socket is fully closed
                 
                 // Create appropriate connection manager
                 connectionManager = when (type.lowercase()) {
@@ -196,9 +196,16 @@ class DiamondPrinterPlugin :
                             }
                             return@launch
                         }
+                        // Ensure bluetoothManager is in clean state
+                        bluetoothManager?.disconnect()
+                        delay(500) // Wait for disconnect to complete (BluetoothConnectionManager has 500ms sleep)
                         bluetoothManager
                     }
-                    "wifi" -> wifiManager
+                    "wifi" -> {
+                        wifiManager.disconnect()
+                        delay(300) // Wait for disconnect to complete (WiFiConnectionManager has 200ms sleep)
+                        wifiManager
+                    }
                     else -> {
                         withContext(Dispatchers.Main) {
                             result.error("INVALID_TYPE", "Unsupported connection type: $type", null)
@@ -223,18 +230,31 @@ class DiamondPrinterPlugin :
     }
     
     private fun handleDisconnect(result: Result) {
-        try {
-            connectionManager?.disconnect()
-            // Don't set to null immediately - let the connection manager handle cleanup
-            // Wait a bit to ensure socket is fully closed before allowing new connections
-            connectionManager = null
-            Log.d(TAG, "Disconnect handled - connectionManager set to null")
-            result.success(null)
-        } catch (e: Exception) {
-            Log.e(TAG, "Disconnect error: ${e.message}", e)
-            // Still set to null even on error
-            connectionManager = null
-            result.error("DISCONNECT_ERROR", e.message, null)
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                // Disconnect and wait for it to complete
+                connectionManager?.disconnect()
+                
+                // Wait longer to ensure socket is fully closed and resources are released
+                delay(800) // Wait for disconnect to complete (BluetoothConnectionManager has 500ms sleep)
+                
+                // Now set to null after cleanup is complete
+                connectionManager = null
+                Log.d(TAG, "Disconnect handled - connectionManager set to null after cleanup")
+                
+                withContext(Dispatchers.Main) {
+                    result.success(null)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Disconnect error: ${e.message}", e)
+                // Still set to null even on error, but wait a bit first
+                delay(500)
+                connectionManager = null
+                
+                withContext(Dispatchers.Main) {
+                    result.error("DISCONNECT_ERROR", e.message, null)
+                }
+            }
         }
     }
     
