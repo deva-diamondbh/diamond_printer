@@ -87,7 +87,16 @@ class ESCPOSCommandGenerator : PrinterCommandGenerator {
         }
         monoImage.recycle()
         
-        // Line feed
+        // Multiple line feeds - Bixolon printers need extra feeds to trigger printing
+        // This ensures the image buffer is flushed and printed
+        outputStream.write(generateFeedCommand(5))
+        
+        // Form feed command (0x0C) - standard ESC/POS command to trigger printing
+        // This explicitly tells the printer to print the buffered data
+        val FORM_FEED = 0x0C
+        outputStream.write(FORM_FEED)
+        
+        // Additional line feeds to ensure printing completes
         outputStream.write(generateFeedCommand(3))
         
         Log.d(TAG, "✓ Successfully encoded image (${outputStream.size()} bytes)")

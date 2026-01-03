@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.util.Log
+import java.io.IOException
 import java.io.OutputStream
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
@@ -241,43 +242,100 @@ class BluetoothConnectionManager(private val context: Context) : ConnectionManag
     }
     
     override fun sendData(data: ByteArray) {
-        try {
-            if (!isConnected()) {
-                throw IllegalStateException("Not connected to a device")
-            }
-            
-            val outputStream = this.outputStream ?: throw IllegalStateException("Output stream is null")
-            
-            // Bixolon printers often need data sent in chunks with delays
-            // This prevents buffer overflow and ensures proper processing
-            val chunkSize = 1024 // 1KB chunks - safe size for most Bluetooth connections
-            var offset = 0
-            
-            while (offset < data.size) {
-                val remaining = data.size - offset
-                val currentChunkSize = minOf(chunkSize, remaining)
-                
-                // Write chunk
-                outputStream.write(data, offset, currentChunkSize)
-                outputStream.flush()
-                
-                offset += currentChunkSize
-                
-                // Small delay between chunks for Bixolon printers to process data
-                // This is especially important for large images or complex commands
-                if (offset < data.size) {
-                    Thread.sleep(10) // 10ms delay between chunks
+        var retryCount = 0
+        val maxRetries = 3
+        
+        while (retryCount <= maxRetries) {
+            try {
+                if (!isConnected()) {
+                    throw IllegalStateException("Not connected to a device")
                 }
+                
+                val outputStream = this.outputStream ?: throw IllegalStateException("Output stream is null")
+                
+                // Bixolon printers need smaller chunks and longer delays for large data
+                // Smaller chunks prevent buffer overflow and connection timeouts
+                val chunkSize = when {
+                    data.size > 20000 -> 512  // 512 bytes for very large images (>20KB)
+                    data.size > 10000 -> 768  // 768 bytes for large images (>10KB)
+                    else -> 1024              // 1KB for smaller data
+                }
+                
+                var offset = 0
+                
+                while (offset < data.size) {
+                    // Verify connection before each chunk
+                    if (!isConnected()) {
+                        throw IllegalStateException("Connection lost during transmission")
+                    }
+                    
+                    val remaining = data.size - offset
+                    val currentChunkSize = minOf(chunkSize, remaining)
+                    
+                    // Write chunk
+                    outputStream.write(data, offset, currentChunkSize)
+                    outputStream.flush()
+                    
+                    offset += currentChunkSize
+                    
+                    // Longer delays between chunks for Bixolon printers
+                    // This prevents "Broken pipe" errors by giving printer time to process
+                    if (offset < data.size) {
+                        val delayMs = when {
+                            data.size > 20000 -> 30L  // 30ms for very large images
+                            data.size > 10000 -> 20L  // 20ms for large images
+                            else -> 15L               // 15ms for smaller data
+                        }
+                        Thread.sleep(delayMs)
+                    }
+                }
+                
+                // Additional flush and delay at the end to ensure Bixolon printers process the last chunk
+                // Longer delay for larger data (images) to allow printer to process
+                outputStream.flush()
+                val finalDelayMs = when {
+                    data.size > 20000 -> 300L // 300ms for very large images (>20KB)
+                    data.size > 10000 -> 200L // 200ms for large images (>10KB)
+                    data.size > 1000 -> 100L  // 100ms for medium data
+                    else -> 50L               // 50ms for small data
+                }
+                Thread.sleep(finalDelayMs)
+                
+                Log.d(TAG, "Sent ${data.size} bytes in chunks (chunk size: $chunkSize, final delay: ${finalDelayMs}ms)")
+                return // Success - exit retry loop
+                
+            } catch (e: IOException) {
+                // Handle "Broken pipe" and other IO errors with retry
+                if (e.message?.contains("Broken pipe", ignoreCase = true) == true || 
+                    e.message?.contains("Connection reset", ignoreCase = true) == true) {
+                    retryCount++
+                    if (retryCount <= maxRetries) {
+                        Log.w(TAG, "Connection error (${e.message}), retrying... (attempt $retryCount/$maxRetries)")
+                        // Wait before retry with exponential backoff
+                        val retryDelay = minOf(1000L, 200L * retryCount)
+                        Thread.sleep(retryDelay)
+                        
+                        // Try to reconnect if connection is lost
+                        if (!isConnected()) {
+                            Log.w(TAG, "Connection lost, attempting to reconnect...")
+                            // Note: Reconnection would need the device address, which we don't have here
+                            // For now, just throw the error
+                            throw IllegalStateException("Connection lost and cannot reconnect without device address")
+                        }
+                    } else {
+                        Log.e(TAG, "Failed to send data after $maxRetries retries: ${e.message}", e)
+                        throw e
+                    }
+                } else {
+                    // Non-retryable IO error
+                    Log.e(TAG, "IO error sending data: ${e.message}", e)
+                    throw e
+                }
+            } catch (e: Exception) {
+                // Non-IO errors are not retried
+                Log.e(TAG, "Error sending data: ${e.message}", e)
+                throw e
             }
-            
-            // Additional flush and small delay at the end to ensure Bixolon printers process the last chunk
-            outputStream.flush()
-            Thread.sleep(50) // 50ms delay after all data is sent
-            
-            Log.d(TAG, "Sent ${data.size} bytes in chunks (chunk size: $chunkSize)")
-        } catch (e: Exception) {
-            Log.e(TAG, "Error sending data: ${e.message}", e)
-            throw e
         }
     }
     
