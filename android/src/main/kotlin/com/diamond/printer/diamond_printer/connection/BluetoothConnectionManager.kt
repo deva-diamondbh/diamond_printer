@@ -31,7 +31,7 @@ class BluetoothConnectionManager(private val context: Context) : ConnectionManag
         private const val TAG = "BTConnectionManager"
         // Standard SPP UUID for serial communication
         private val SPP_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
-        private const val DISCOVERY_TIMEOUT = 12000L // 12 seconds
+        private const val DISCOVERY_TIMEOUT = 15000L // 15 seconds - increased for better Classic Bluetooth device discovery
     }
     
     override fun connect(address: String): Boolean {
@@ -104,7 +104,7 @@ class BluetoothConnectionManager(private val context: Context) : ConnectionManag
                 Log.w(TAG, "SecurityException cancelling discovery: ${e.message}")
             }
             
-            // Try standard connection first
+            // Try standard connection first (most reliable for Bixolon SPP-R310)
             try {
                 Log.d(TAG, "Trying secure connection...")
                 bluetoothSocket = device.createRfcommSocketToServiceRecord(SPP_UUID)
@@ -118,11 +118,11 @@ class BluetoothConnectionManager(private val context: Context) : ConnectionManag
             } catch (e: Exception) {
                 Log.w(TAG, "Secure connection failed: ${e.message}")
                 disconnect()
-                // Small delay before trying next method
-                Thread.sleep(200)
+                // Slightly longer delay before trying next method (for Bixolon devices)
+                Thread.sleep(300)
             }
             
-            // Try insecure connection as fallback
+            // Try insecure connection as fallback (some Bixolon models prefer this)
             try {
                 Log.d(TAG, "Trying insecure connection...")
                 bluetoothSocket = device.createInsecureRfcommSocketToServiceRecord(SPP_UUID)
@@ -136,13 +136,13 @@ class BluetoothConnectionManager(private val context: Context) : ConnectionManag
             } catch (e: Exception) {
                 Log.w(TAG, "Insecure connection failed: ${e.message}")
                 disconnect()
-                // Small delay before trying next method
-                Thread.sleep(200)
+                // Slightly longer delay before trying next method (for Bixolon devices)
+                Thread.sleep(300)
             }
             
-            // Try reflection-based connection as last resort (for problematic devices)
+            // Try reflection-based connection as last resort (for problematic Bixolon devices)
             try {
-                Log.d(TAG, "Trying reflection-based connection...")
+                Log.d(TAG, "Trying reflection-based connection (Bixolon fallback)...")
                 val socket = device.javaClass.getMethod("createRfcommSocket", Int::class.javaPrimitiveType)
                     .invoke(device, 1) as BluetoothSocket
                 bluetoothSocket = socket
@@ -246,10 +246,35 @@ class BluetoothConnectionManager(private val context: Context) : ConnectionManag
                 throw IllegalStateException("Not connected to a device")
             }
             
-            outputStream?.write(data)
-            outputStream?.flush()
+            val outputStream = this.outputStream ?: throw IllegalStateException("Output stream is null")
             
-            Log.d(TAG, "Sent ${data.size} bytes")
+            // Bixolon printers often need data sent in chunks with delays
+            // This prevents buffer overflow and ensures proper processing
+            val chunkSize = 1024 // 1KB chunks - safe size for most Bluetooth connections
+            var offset = 0
+            
+            while (offset < data.size) {
+                val remaining = data.size - offset
+                val currentChunkSize = minOf(chunkSize, remaining)
+                
+                // Write chunk
+                outputStream.write(data, offset, currentChunkSize)
+                outputStream.flush()
+                
+                offset += currentChunkSize
+                
+                // Small delay between chunks for Bixolon printers to process data
+                // This is especially important for large images or complex commands
+                if (offset < data.size) {
+                    Thread.sleep(10) // 10ms delay between chunks
+                }
+            }
+            
+            // Additional flush and small delay at the end to ensure Bixolon printers process the last chunk
+            outputStream.flush()
+            Thread.sleep(50) // 50ms delay after all data is sent
+            
+            Log.d(TAG, "Sent ${data.size} bytes in chunks (chunk size: $chunkSize)")
         } catch (e: Exception) {
             Log.e(TAG, "Error sending data: ${e.message}", e)
             throw e
@@ -426,43 +451,86 @@ class BluetoothConnectionManager(private val context: Context) : ConnectionManag
     
     /**
      * Get all devices (paired + discovered)
+     * CRITICAL: Paired devices are included first (important for Classic Bluetooth devices like Bixolon)
      */
     private fun getAllDevices(): List<Map<String, String>> {
         val devices = mutableListOf<Map<String, String>>()
         val addedAddresses = mutableSetOf<String>()
         
         try {
-            // Add paired devices first
+            // Add paired devices first (CRITICAL for Bixolon SPP-R310 and similar Classic Bluetooth devices)
+            // Bixolon printers often need to be paired first before they appear in discovery
             bluetoothAdapter?.bondedDevices?.forEach { device ->
-                devices.add(
-                    mapOf(
-                        "name" to (device.name ?: "Unknown Device"),
+                try {
+                    val deviceName = device.name?.takeIf { it.isNotBlank() } 
+                        ?: "Bluetooth Device (${device.address.takeLast(8)})"
+                    val deviceInfo = mapOf(
+                        "name" to deviceName,
                         "address" to device.address,
                         "type" to "bluetooth",
                         "bonded" to "true"
                     )
-                )
-                addedAddresses.add(device.address)
+                    devices.add(deviceInfo)
+                    addedAddresses.add(device.address)
+                    Log.d(TAG, "Added paired device: $deviceName - ${device.address}")
+                } catch (e: SecurityException) {
+                    Log.w(TAG, "SecurityException accessing paired device ${device.address}: ${e.message}")
+                    // Try to add with minimal info
+                    try {
+                        devices.add(
+                            mapOf(
+                                "name" to "Bluetooth Device",
+                                "address" to device.address,
+                                "type" to "bluetooth",
+                                "bonded" to "true"
+                            )
+                        )
+                        addedAddresses.add(device.address)
+                    } catch (e2: Exception) {
+                        Log.e(TAG, "Failed to add device even with minimal info: ${e2.message}")
+                    }
+                }
             }
             
-            // Add newly discovered devices
+            // Add newly discovered devices (even if they don't have names)
             discoveredDevices.forEach { device ->
                 if (!addedAddresses.contains(device.address)) {
-                    devices.add(
-                        mapOf(
-                            "name" to (device.name ?: "Unknown Device"),
+                    try {
+                        val deviceName = device.name?.takeIf { it.isNotBlank() }
+                            ?: "Bluetooth Device (${device.address.takeLast(8)})"
+                        val deviceInfo = mapOf(
+                            "name" to deviceName,
                             "address" to device.address,
                             "type" to "bluetooth",
                             "bonded" to "false"
                         )
-                    )
+                        devices.add(deviceInfo)
+                        addedAddresses.add(device.address)
+                        Log.d(TAG, "Added discovered device: $deviceName - ${device.address}")
+                    } catch (e: SecurityException) {
+                        Log.w(TAG, "SecurityException accessing discovered device ${device.address}: ${e.message}")
+                        // Still try to add with address only
+                        try {
+                            devices.add(
+                                mapOf(
+                                    "name" to "Bluetooth Device",
+                                    "address" to device.address,
+                                    "type" to "bluetooth",
+                                    "bonded" to "false"
+                                )
+                            )
+                            addedAddresses.add(device.address)
+                        } catch (e2: Exception) {
+                            Log.e(TAG, "Failed to add discovered device: ${e2.message}")
+                        }
+                    }
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error getting all devices: ${e.message}")
+            Log.e(TAG, "Error getting all devices: ${e.message}", e)
         }
         
-        Log.d(TAG, "Total devices found: ${devices.size}")
+        Log.d(TAG, "Total devices found: ${devices.size} (${addedAddresses.size} unique addresses)")
         return devices
     }
     

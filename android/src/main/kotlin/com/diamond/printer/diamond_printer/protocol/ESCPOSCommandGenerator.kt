@@ -48,7 +48,10 @@ class ESCPOSCommandGenerator : PrinterCommandGenerator {
         // Write text
         outputStream.write(text.toByteArray(Charset.forName("UTF-8")))
         
-        // Line feed
+        // Multiple line feeds - Bixolon printers often need extra feeds to trigger printing
+        // This ensures the text buffer is flushed and printed
+        outputStream.write(LINE_FEED)
+        outputStream.write(LINE_FEED)
         outputStream.write(LINE_FEED)
         
         return outputStream.toByteArray()

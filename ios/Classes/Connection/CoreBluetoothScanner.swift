@@ -87,24 +87,29 @@ class CoreBluetoothScanner: NSObject, CBCentralManagerDelegate, CBPeripheralDele
         scanTimer?.invalidate()
         scanTimer = nil
         
-        // Filter out devices without names and map to device info
+        // Include all discovered devices (even without names, as some printers don't advertise names)
+        // Use device name if available, otherwise use UUID prefix as fallback
         let devices = discoveredPeripherals
-            .filter { peripheral in
-                // Only include devices with names
-                if let name = peripheral.name, !name.isEmpty {
-                    return true
-                }
-                return false
-            }
             .map { peripheral -> [String: String] in
+                // Use peripheral name if available, otherwise use a descriptive default
+                let deviceName: String
+                if let name = peripheral.name, !name.isEmpty {
+                    deviceName = name
+                } else {
+                    // Use UUID prefix as fallback name for devices without advertised names
+                    let uuidString = peripheral.identifier.uuidString
+                    let uuidPrefix = String(uuidString.prefix(8))
+                    deviceName = "Bluetooth Device (\(uuidPrefix))"
+                }
+                
                 return [
-                    "name": peripheral.name ?? "Unknown",
+                    "name": deviceName,
                     "address": peripheral.identifier.uuidString,
                     "type": "bluetooth"
                 ]
             }
         
-        print("Returning \(devices.count) named devices (filtered from \(discoveredPeripherals.count) total)")
+        print("Returning \(devices.count) devices (from \(discoveredPeripherals.count) total discovered)")
         scanCompletion?(devices)
         scanCompletion = nil
     }
