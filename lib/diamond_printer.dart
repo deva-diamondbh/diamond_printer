@@ -1,4 +1,6 @@
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
+import 'package:image/image.dart' as img;
 import 'diamond_printer_platform_interface.dart';
 import 'models/printer_device.dart';
 import 'models/printer_language.dart';
@@ -62,6 +64,8 @@ class AdvancedPrinter {
   /// [imageBytes] - The image data as bytes
   /// [language] - Printer language: 'escpos', 'cpcl', 'zpl', or 'eos' (default: 'escpos')
   /// [config] - Optional printer configuration (overrides setPrinterConfig)
+  ///
+  /// The image will be automatically resized to fit within the paper width if it's too large.
   Future<void> printImage(
     Uint8List imageBytes, {
     String language = PrinterLanguage.escpos,
@@ -70,11 +74,62 @@ class AdvancedPrinter {
     if (!PrinterLanguage.isSupported(language)) {
       throw ArgumentError('Unsupported printer language: $language');
     }
+    
+    final printerConfig = config ?? _config;
+    
+    // Resize image to fit paper width if needed
+    final resizedImageBytes = await _resizeImageIfNeeded(imageBytes, printerConfig);
+    
     await DiamondPrinterPlatform.instance.printImage(
-      imageBytes,
+      resizedImageBytes,
       language: language,
-      config: (config ?? _config).toMap(),
+      config: printerConfig.toMap(),
     );
+  }
+  
+  /// Resize image to fit within paper width if it's too large
+  /// Returns the original bytes if no resizing is needed
+  Future<Uint8List> _resizeImageIfNeeded(Uint8List imageBytes, PrinterConfig config) async {
+    try {
+      // Decode image
+      final decodedImage = img.decodeImage(imageBytes);
+      if (decodedImage == null) {
+        debugPrint('[diamond_printer] Failed to decode image, using original bytes');
+        return imageBytes;
+      }
+      
+      final originalWidth = decodedImage.width;
+      final maxWidth = config.maxImageWidth;
+      
+      // If image fits within paper width, return original
+      if (originalWidth <= maxWidth) {
+        debugPrint('[diamond_printer] Image width ($originalWidth) fits within paper width ($maxWidth), no resizing needed');
+        return imageBytes;
+      }
+      
+      // Calculate new height maintaining aspect ratio
+      final aspectRatio = decodedImage.height / decodedImage.width;
+      final newHeight = (maxWidth * aspectRatio).toInt();
+      
+      debugPrint('[diamond_printer] Resizing image from ${originalWidth}x${decodedImage.height} to ${maxWidth}x$newHeight to fit paper width');
+      
+      // Resize image
+      final resizedImage = img.copyResize(
+        decodedImage,
+        width: maxWidth,
+        height: newHeight,
+        interpolation: img.Interpolation.linear,
+      );
+      
+      // Convert back to bytes (PNG format)
+      final resizedBytes = Uint8List.fromList(img.encodePng(resizedImage));
+      debugPrint('[diamond_printer] Image resized successfully, new size: ${resizedBytes.length} bytes');
+      
+      return resizedBytes;
+    } catch (e) {
+      debugPrint('[diamond_printer] Error resizing image: $e, using original bytes');
+      return imageBytes; // Return original if resize fails
+    }
   }
 
   /// Print a PDF file using the specified printer language
