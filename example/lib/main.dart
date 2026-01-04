@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'dart:typed_data';
 import 'package:diamond_printer/diamond_printer.dart';
 
 void main() {
@@ -198,11 +200,20 @@ class _PrinterDemoPageState extends State<PrinterDemoPage> {
     });
 
     try {
-      // Load a test image from assets
-      final ByteData data = await rootBundle.load('assets/test_image.png');
-      final Uint8List bytes = data.buffer.asUint8List();
+      // Try to load inv.png first (for testing), fallback to test_image.png
+      Uint8List bytes;
+      try {
+        final ByteData data = await rootBundle.load('assets/images/inv.png');
+        bytes = data.buffer.asUint8List();
+        debugPrint('Loaded asset image: inv.png (${bytes.length} bytes)');
+      } catch (e) {
+        // Fallback to test_image.png
+        final ByteData data = await rootBundle.load('assets/test_image.png');
+        bytes = data.buffer.asUint8List();
+        debugPrint('Loaded asset image: test_image.png (${bytes.length} bytes)');
+      }
 
-      await _printer.printImage(bytes, language: _selectedLanguage);
+      await _printer.printImage(bytes, language: _selectedLanguage, config: _printerConfig);
       
       setState(() {
         _statusMessage = 'Image printed successfully';
@@ -212,7 +223,7 @@ class _PrinterDemoPageState extends State<PrinterDemoPage> {
       setState(() {
         _statusMessage = 'Print failed';
       });
-      _showError('Print image failed: $e. Make sure assets/test_image.png exists.');
+      _showError('Print image failed: $e. Make sure assets/images/inv.png or assets/test_image.png exists.');
     }
   }
 

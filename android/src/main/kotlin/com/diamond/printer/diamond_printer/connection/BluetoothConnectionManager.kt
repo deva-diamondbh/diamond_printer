@@ -253,55 +253,61 @@ class BluetoothConnectionManager(private val context: Context) : ConnectionManag
                 
                 val outputStream = this.outputStream ?: throw IllegalStateException("Output stream is null")
                 
-                // Bixolon printers need smaller chunks and longer delays for large data
-                // Smaller chunks prevent buffer overflow and connection timeouts
-                val chunkSize = when {
-                    data.size > 20000 -> 512  // 512 bytes for very large images (>20KB)
-                    data.size > 10000 -> 768  // 768 bytes for large images (>10KB)
-                    else -> 1024              // 1KB for smaller data
-                }
-                
-                var offset = 0
-                
-                while (offset < data.size) {
-                    // Verify connection before each chunk
-                    if (!isConnected()) {
-                        throw IllegalStateException("Connection lost during transmission")
-                    }
-                    
-                    val remaining = data.size - offset
-                    val currentChunkSize = minOf(chunkSize, remaining)
-                    
-                    // Write chunk
-                    outputStream.write(data, offset, currentChunkSize)
+                // For small text data (< 1KB), send immediately without delays to avoid gaps
+                // For large images, use chunking and delays to prevent buffer overflow
+                if (data.size < 1024) {
+                    // Small data (text) - send immediately without delays
+                    outputStream.write(data)
                     outputStream.flush()
-                    
-                    offset += currentChunkSize
-                    
-                    // Longer delays between chunks for Bixolon printers
-                    // This prevents "Broken pipe" errors by giving printer time to process
-                    if (offset < data.size) {
-                        val delayMs = when {
-                            data.size > 20000 -> 30L  // 30ms for very large images
-                            data.size > 10000 -> 20L  // 20ms for large images
-                            else -> 15L               // 15ms for smaller data
-                        }
-                        Thread.sleep(delayMs)
+                    Log.d(TAG, "Sent ${data.size} bytes (text, no delays)")
+                } else {
+                    // Large data (images) - use chunking and delays
+                    val chunkSize = when {
+                        data.size > 20000 -> 512  // 512 bytes for very large images (>20KB)
+                        data.size > 10000 -> 768  // 768 bytes for large images (>10KB)
+                        else -> 1024              // 1KB for medium data
                     }
+                    
+                    var offset = 0
+                    
+                    while (offset < data.size) {
+                        // Verify connection before each chunk
+                        if (!isConnected()) {
+                            throw IllegalStateException("Connection lost during transmission")
+                        }
+                        
+                        val remaining = data.size - offset
+                        val currentChunkSize = minOf(chunkSize, remaining)
+                        
+                        // Write chunk
+                        outputStream.write(data, offset, currentChunkSize)
+                        outputStream.flush()
+                        
+                        offset += currentChunkSize
+                        
+                        // Delays between chunks only for large images
+                        // This prevents "Broken pipe" errors by giving printer time to process
+                        if (offset < data.size) {
+                            val delayMs = when {
+                                data.size > 20000 -> 30L  // 30ms for very large images
+                                data.size > 10000 -> 20L  // 20ms for large images
+                                else -> 10L               // 10ms for medium data
+                            }
+                            Thread.sleep(delayMs)
+                        }
+                    }
+                    
+                    // Final delay only for large images
+                    outputStream.flush()
+                    val finalDelayMs = when {
+                        data.size > 20000 -> 300L // 300ms for very large images (>20KB)
+                        data.size > 10000 -> 200L // 200ms for large images (>10KB)
+                        else -> 50L               // 50ms for medium data
+                    }
+                    Thread.sleep(finalDelayMs)
+                    Log.d(TAG, "Sent ${data.size} bytes in chunks (chunk size: $chunkSize, final delay: ${finalDelayMs}ms)")
                 }
                 
-                // Additional flush and delay at the end to ensure Bixolon printers process the last chunk
-                // Longer delay for larger data (images) to allow printer to process
-                outputStream.flush()
-                val finalDelayMs = when {
-                    data.size > 20000 -> 300L // 300ms for very large images (>20KB)
-                    data.size > 10000 -> 200L // 200ms for large images (>10KB)
-                    data.size > 1000 -> 100L  // 100ms for medium data
-                    else -> 50L               // 50ms for small data
-                }
-                Thread.sleep(finalDelayMs)
-                
-                Log.d(TAG, "Sent ${data.size} bytes in chunks (chunk size: $chunkSize, final delay: ${finalDelayMs}ms)")
                 return // Success - exit retry loop
                 
             } catch (e: IOException) {

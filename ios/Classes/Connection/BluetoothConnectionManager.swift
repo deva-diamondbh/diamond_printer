@@ -201,7 +201,7 @@ class BluetoothConnectionManager: NSObject, ConnectionManager, StreamDelegate {
         
         // Use CPCL-aware chunking if needed
         // Verify connection is still active
-        guard isConnected(), let outputStream = outputStream, outputStream.streamStatus == .open else {
+        guard isConnected(), outputStream.streamStatus == .open else {
             Logger.error("Connection lost before chunking", category: .connection)
             Logger.methodExit("MFi sendData", success: false)
             completion(.failure(PrinterError.notConnected))
@@ -271,7 +271,7 @@ class BluetoothConnectionManager: NSObject, ConnectionManager, StreamDelegate {
         }
         
         // Verify connection is still active
-        guard isConnected(), let outputStream = outputStream, outputStream.streamStatus == .open else {
+        guard isConnected(), outputStream.streamStatus == .open else {
             Logger.error("Connection lost during transmission", category: .connection)
             Logger.methodExit("MFi sendData", success: false)
             isSending = false
