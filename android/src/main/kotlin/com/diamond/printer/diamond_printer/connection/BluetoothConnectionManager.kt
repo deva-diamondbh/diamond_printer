@@ -27,12 +27,19 @@ class BluetoothConnectionManager(private val context: Context) : ConnectionManag
     private val bluetoothAdapter: BluetoothAdapter? = BluetoothAdapter.getDefaultAdapter()
     private var discoveryReceiver: BroadcastReceiver? = null
     private val discoveredDevices = mutableSetOf<BluetoothDevice>()
+    private var connectedDeviceAddress: String? = null  // Store for reconnection
     
     companion object {
         private const val TAG = "BTConnectionManager"
         // Standard SPP UUID for serial communication
         private val SPP_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
-        private const val DISCOVERY_TIMEOUT = 15000L // 15 seconds - increased for better Classic Bluetooth device discovery
+        private const val DISCOVERY_TIMEOUT = 15000L // 15 seconds
+        
+        // Chunk size and queue sleep time for reliable transmission
+        // Based on esc_pos_bluetooth library approach (https://github.com/wwandreww/esc_pos_bluetooth)
+        // Small chunks with sleep between prevents buffer overflow on slow printers
+        private const val CHUNK_SIZE = 512  // 512 bytes per chunk
+        private const val QUEUE_SLEEP_TIME_MS = 50L  // 50ms sleep between chunks (adjustable: 20-100ms)
     }
     
     override fun connect(address: String): Boolean {
@@ -113,6 +120,7 @@ class BluetoothConnectionManager(private val context: Context) : ConnectionManag
                 
                 if (bluetoothSocket?.isConnected == true) {
                     outputStream = bluetoothSocket?.outputStream
+                    connectedDeviceAddress = address
                     Log.d(TAG, "✓ Successfully connected to $address (secure)")
                     return true
                 }
@@ -131,6 +139,7 @@ class BluetoothConnectionManager(private val context: Context) : ConnectionManag
                 
                 if (bluetoothSocket?.isConnected == true) {
                     outputStream = bluetoothSocket?.outputStream
+                    connectedDeviceAddress = address
                     Log.d(TAG, "✓ Successfully connected to $address (insecure)")
                     return true
                 }
@@ -151,6 +160,7 @@ class BluetoothConnectionManager(private val context: Context) : ConnectionManag
                 
                 if (socket.isConnected) {
                     outputStream = socket.outputStream
+                    connectedDeviceAddress = address
                     Log.d(TAG, "✓ Successfully connected to $address (reflection)")
                     return true
                 }
@@ -216,16 +226,39 @@ class BluetoothConnectionManager(private val context: Context) : ConnectionManag
             // Always nullify references to ensure clean state
             outputStream = null
             bluetoothSocket = null
+            connectedDeviceAddress = null
             Log.d(TAG, "Disconnect complete - socket and stream set to null")
         }
     }
     
     override fun isConnected(): Boolean {
         return try {
-            bluetoothSocket?.isConnected == true
+            val socket = bluetoothSocket
+            val stream = outputStream
+            socket != null && socket.isConnected && stream != null
         } catch (e: Exception) {
             // If there's an error checking connection, assume not connected
             Log.w(TAG, "Error checking connection state: ${e.message}")
+            false
+        }
+    }
+    
+    /**
+     * Test if the connection is actually alive by attempting a small write
+     * Returns true if connection is alive, false if broken
+     */
+    private fun testConnection(): Boolean {
+        return try {
+            val socket = bluetoothSocket
+            val stream = outputStream
+            if (socket == null || !socket.isConnected || stream == null) {
+                return false
+            }
+            // Try to write nothing (just flush) - this will fail if connection is broken
+            stream.flush()
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "Connection test failed: ${e.message}")
             false
         }
     }
@@ -242,99 +275,96 @@ class BluetoothConnectionManager(private val context: Context) : ConnectionManag
     }
     
     override fun sendData(data: ByteArray) {
+        sendDataWithQueueSleep(data, QUEUE_SLEEP_TIME_MS)
+    }
+    
+    /**
+     * Send data with configurable queue sleep time between chunks
+     * Similar to esc_pos_bluetooth library's queueSleepTimeMs approach
+     * Reference: https://github.com/wwandreww/esc_pos_bluetooth
+     */
+    private fun sendDataWithQueueSleep(data: ByteArray, queueSleepTimeMs: Long) {
         var retryCount = 0
         val maxRetries = 3
         
         while (retryCount <= maxRetries) {
             try {
-                if (!isConnected()) {
-                    throw IllegalStateException("Not connected to a device")
+                // Test connection before attempting to send
+                if (!testConnection()) {
+                    // Try to reconnect if we have the device address
+                    val address = connectedDeviceAddress
+                    if (address != null && retryCount < maxRetries) {
+                        Log.w(TAG, "Connection appears broken, attempting reconnect to $address...")
+                        disconnect()
+                        Thread.sleep(500L)
+                        if (connect(address)) {
+                            Log.d(TAG, "Reconnected successfully to $address")
+                        } else {
+                            throw IllegalStateException("Failed to reconnect to $address")
+                        }
+                    } else {
+                        throw IllegalStateException("Not connected to a device")
+                    }
                 }
                 
                 val outputStream = this.outputStream ?: throw IllegalStateException("Output stream is null")
                 
-                // For small text data (< 1KB), send immediately without delays to avoid gaps
-                // For large images, use chunking and delays to prevent buffer overflow
-                if (data.size < 1024) {
-                    // Small data (text) - send immediately without delays
-                    outputStream.write(data)
+                // Split data into chunks and send with sleep between each
+                // This approach is used by esc_pos_bluetooth library to handle slow printers
+                val chunkSize = CHUNK_SIZE
+                var offset = 0
+                var chunkCount = 0
+                
+                while (offset < data.size) {
+                    val remaining = data.size - offset
+                    val currentChunkSize = minOf(chunkSize, remaining)
+                    
+                    // Write chunk
+                    outputStream.write(data, offset, currentChunkSize)
                     outputStream.flush()
-                    Log.d(TAG, "Sent ${data.size} bytes (text, no delays)")
-                } else {
-                    // Large data (images) - use chunking and delays
-                    val chunkSize = when {
-                        data.size > 20000 -> 512  // 512 bytes for very large images (>20KB)
-                        data.size > 10000 -> 768  // 768 bytes for large images (>10KB)
-                        else -> 1024              // 1KB for medium data
-                    }
                     
-                    var offset = 0
+                    offset += currentChunkSize
+                    chunkCount++
                     
-                    while (offset < data.size) {
-                        // Verify connection before each chunk
-                        if (!isConnected()) {
-                            throw IllegalStateException("Connection lost during transmission")
-                        }
-                        
-                        val remaining = data.size - offset
-                        val currentChunkSize = minOf(chunkSize, remaining)
-                        
-                        // Write chunk
-                        outputStream.write(data, offset, currentChunkSize)
-                        outputStream.flush()
-                        
-                        offset += currentChunkSize
-                        
-                        // Delays between chunks only for large images
-                        // This prevents "Broken pipe" errors by giving printer time to process
-                        if (offset < data.size) {
-                            val delayMs = when {
-                                data.size > 20000 -> 30L  // 30ms for very large images
-                                data.size > 10000 -> 20L  // 20ms for large images
-                                else -> 10L               // 10ms for medium data
-                            }
-                            Thread.sleep(delayMs)
-                        }
+                    // Queue sleep between chunks - critical for Bixolon and similar printers
+                    // This gives the printer time to process each chunk
+                    if (offset < data.size) {
+                        Thread.sleep(queueSleepTimeMs)
                     }
-                    
-                    // Final delay only for large images
-                    outputStream.flush()
-                    val finalDelayMs = when {
-                        data.size > 20000 -> 300L // 300ms for very large images (>20KB)
-                        data.size > 10000 -> 200L // 200ms for large images (>10KB)
-                        else -> 50L               // 50ms for medium data
-                    }
-                    Thread.sleep(finalDelayMs)
-                    Log.d(TAG, "Sent ${data.size} bytes in chunks (chunk size: $chunkSize, final delay: ${finalDelayMs}ms)")
                 }
                 
+                // Final delay for printer to finish processing
+                Thread.sleep(queueSleepTimeMs * 2)
+                
+                Log.d(TAG, "Sent ${data.size} bytes in $chunkCount chunks (${chunkSize}B each, ${queueSleepTimeMs}ms sleep)")
                 return // Success - exit retry loop
                 
             } catch (e: IOException) {
                 // Handle "Broken pipe" and other IO errors with retry
-                if (e.message?.contains("Broken pipe", ignoreCase = true) == true || 
-                    e.message?.contains("Connection reset", ignoreCase = true) == true) {
-                    retryCount++
-                    if (retryCount <= maxRetries) {
-                        Log.w(TAG, "Connection error (${e.message}), retrying... (attempt $retryCount/$maxRetries)")
-                        // Wait before retry with exponential backoff
-                        val retryDelay = minOf(1000L, 200L * retryCount)
-                        Thread.sleep(retryDelay)
-                        
-                        // Try to reconnect if connection is lost
-                        if (!isConnected()) {
-                            Log.w(TAG, "Connection lost, attempting to reconnect...")
-                            // Note: Reconnection would need the device address, which we don't have here
-                            // For now, just throw the error
-                            throw IllegalStateException("Connection lost and cannot reconnect without device address")
+                retryCount++
+                if (retryCount <= maxRetries) {
+                    Log.w(TAG, "IO error (${e.message}), retrying... (attempt $retryCount/$maxRetries)")
+                    
+                    // Try to reconnect
+                    val address = connectedDeviceAddress
+                    if (address != null) {
+                        Log.w(TAG, "Attempting reconnect to $address...")
+                        try {
+                            disconnect()
+                            Thread.sleep(1000L)  // Wait longer before reconnect
+                            if (connect(address)) {
+                                Log.d(TAG, "Reconnected successfully, retrying send...")
+                                continue  // Retry the send
+                            }
+                        } catch (reconnectError: Exception) {
+                            Log.e(TAG, "Reconnect failed: ${reconnectError.message}")
                         }
-                    } else {
-                        Log.e(TAG, "Failed to send data after $maxRetries retries: ${e.message}", e)
-                        throw e
                     }
+                    
+                    // Wait before next retry
+                    Thread.sleep(1000L * retryCount)
                 } else {
-                    // Non-retryable IO error
-                    Log.e(TAG, "IO error sending data: ${e.message}", e)
+                    Log.e(TAG, "Failed to send data after $maxRetries retries: ${e.message}", e)
                     throw e
                 }
             } catch (e: Exception) {

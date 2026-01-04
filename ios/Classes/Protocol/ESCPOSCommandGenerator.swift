@@ -2,6 +2,7 @@ import Foundation
 import UIKit
 
 /// ESC/POS printer command generator for iOS
+/// Optimized for high-quality thermal printer output
 class ESCPOSCommandGenerator: PrinterCommandGenerator {
     
     // ESC/POS Commands
@@ -16,6 +17,13 @@ class ESCPOSCommandGenerator: PrinterCommandGenerator {
         // Initialize printer
         data.append(contentsOf: [ESC, 0x40]) // ESC @
         
+        // Set proper character encoding for international characters
+        // ESC t n - Select character code table (n=28 for UTF-8)
+        data.append(contentsOf: [ESC, 0x74, 28])
+        
+        // Set optimal line spacing for text readability (30/180 inch)
+        data.append(contentsOf: [ESC, 0x33, 30]) // ESC 3 30
+        
         // Add text
         if let textData = text.data(using: .utf8) {
             data.append(textData)
@@ -23,6 +31,9 @@ class ESCPOSCommandGenerator: PrinterCommandGenerator {
         
         // Line feed
         data.append(LF)
+        
+        // Restore default line spacing
+        data.append(contentsOf: [ESC, 0x32]) // ESC 2
         
         return data
     }
@@ -72,7 +83,7 @@ class ESCPOSCommandGenerator: PrinterCommandGenerator {
     }
     
     
-    /// Convert bitmap to ESC/POS format
+    /// Convert bitmap to ESC/POS format with zero line spacing for stripe-free output
     private func convertBitmapToESCPOS(_ bitmap: [[Bool]]) -> Data {
         var data = Data()
         
@@ -82,6 +93,10 @@ class ESCPOSCommandGenerator: PrinterCommandGenerator {
         
         // Center alignment
         data.append(contentsOf: [ESC, 0x61, 1]) // ESC a 1
+        
+        // Set line spacing to zero - eliminates gaps/stripes between image strips
+        // ESC 3 n - Set line spacing to n/180 inch (n=0 for zero spacing)
+        data.append(contentsOf: [ESC, 0x33, 0]) // ESC 3 0
         
         var y = 0
         while y < height {
@@ -112,6 +127,10 @@ class ESCPOSCommandGenerator: PrinterCommandGenerator {
             data.append(LF)
             y += 24
         }
+        
+        // Restore default line spacing - ESC 2 sets default spacing
+        // This ensures text printing after image is not affected
+        data.append(contentsOf: [ESC, 0x32]) // ESC 2
         
         // Left alignment
         data.append(contentsOf: [ESC, 0x61, 0]) // ESC a 0

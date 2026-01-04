@@ -1,6 +1,9 @@
 package com.diamond.printer.diamond_printer.protocol
 
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Matrix
+import android.graphics.Paint
 import android.util.Log
 import java.io.ByteArrayOutputStream
 import java.nio.charset.Charset
@@ -45,12 +48,22 @@ class ESCPOSCommandGenerator : PrinterCommandGenerator {
         // Initialize printer
         outputStream.write(INIT)
         
+        // Set proper character encoding for international characters
+        // ESC t n - Select character code table (n=28 for UTF-8 on most printers)
+        outputStream.write(byteArrayOf(ESC, 't'.code.toByte(), 28))
+        
+        // Set optimal line spacing for text readability (30/180 inch ≈ 4.2mm)
+        outputStream.write(byteArrayOf(ESC, '3'.code.toByte(), 30))
+        
         // Write text
         outputStream.write(text.toByteArray(Charset.forName("UTF-8")))
         
         // Single line feed - enough to trigger printing without causing gaps
         // Bixolon printers need at least one line feed to flush the buffer
         outputStream.write(LINE_FEED)
+        
+        // Restore default line spacing after text
+        outputStream.write(byteArrayOf(ESC, '2'.code.toByte()))
         
         return outputStream.toByteArray()
     }
@@ -63,17 +76,23 @@ class ESCPOSCommandGenerator : PrinterCommandGenerator {
         // Initialize printer
         outputStream.write(INIT)
         
-        // Resize image to fit printer width
+        // Resize image to fit printer width using high-quality scaling
         val resizedBitmap = if (bitmap.width > maxWidth) {
-            val ratio = maxWidth.toFloat() / bitmap.width
-            val newHeight = (bitmap.height * ratio).toInt()
-            Bitmap.createScaledBitmap(bitmap, maxWidth, newHeight, true)
+            scaleWithHighQuality(bitmap, maxWidth)
         } else {
             bitmap
         }
         
+        // Enhance contrast for sharper thermal printer output
+        val enhancedBitmap = enhanceContrast(resizedBitmap)
+        
         // Convert bitmap to monochrome with dithering
-        val monoImage = convertToMonochromeWithDithering(resizedBitmap)
+        val monoImage = convertToMonochromeWithDithering(enhancedBitmap)
+        
+        // Clean up enhanced bitmap if it was created
+        if (enhancedBitmap != resizedBitmap) {
+            enhancedBitmap.recycle()
+        }
         
         // Generate ESC/POS image command
         val imageData = convertBitmapToESCPOS(monoImage)
@@ -115,7 +134,7 @@ class ESCPOSCommandGenerator : PrinterCommandGenerator {
     
     /**
      * Convert bitmap to monochrome (black and white) with Floyd-Steinberg dithering
-     * This produces much better quality for photos and complex images
+     * Uses adaptive threshold based on image brightness for optimal output quality
      */
     private fun convertToMonochromeWithDithering(bitmap: Bitmap): Bitmap {
         val width = bitmap.width
@@ -125,21 +144,33 @@ class ESCPOSCommandGenerator : PrinterCommandGenerator {
         // Create a copy of grayscale values for dithering
         val grayValues = Array(height) { IntArray(width) }
         
-        // Convert to grayscale first
+        // Convert to grayscale and calculate average brightness
+        var totalBrightness = 0L
         for (y in 0 until height) {
             for (x in 0 until width) {
                 val pixel = bitmap.getPixel(x, y)
-                grayValues[y][x] = (android.graphics.Color.red(pixel) * 0.299 +
+                val gray = (android.graphics.Color.red(pixel) * 0.299 +
                         android.graphics.Color.green(pixel) * 0.587 +
                         android.graphics.Color.blue(pixel) * 0.114).toInt()
+                grayValues[y][x] = gray
+                totalBrightness += gray
             }
         }
         
-        // Floyd-Steinberg dithering
+        // Calculate adaptive threshold based on image brightness
+        val avgBrightness = (totalBrightness / (width * height)).toInt()
+        val threshold = when {
+            avgBrightness < 85 -> 100   // Dark image - lower threshold for more detail
+            avgBrightness > 170 -> 160  // Light image - higher threshold for clarity
+            else -> 128                  // Normal balanced threshold
+        }
+        Log.d(TAG, "Image brightness: $avgBrightness, using threshold: $threshold")
+        
+        // Floyd-Steinberg dithering with adaptive threshold
         for (y in 0 until height) {
             for (x in 0 until width) {
-                val oldPixel = grayValues[y][x]
-                val newPixel = if (oldPixel > 128) 255 else 0
+                val oldPixel = grayValues[y][x].coerceIn(0, 255)
+                val newPixel = if (oldPixel > threshold) 255 else 0
                 grayValues[y][x] = newPixel
                 
                 val error = oldPixel - newPixel
@@ -172,6 +203,86 @@ class ESCPOSCommandGenerator : PrinterCommandGenerator {
     }
     
     /**
+     * Scale bitmap with high-quality filtering for better detail preservation
+     */
+    private fun scaleWithHighQuality(bitmap: Bitmap, maxWidth: Int): Bitmap {
+        val ratio = maxWidth.toFloat() / bitmap.width
+        val newHeight = (bitmap.height * ratio).toInt()
+        
+        // Create scaled bitmap with high-quality paint filter
+        val scaledBitmap = Bitmap.createBitmap(maxWidth, newHeight, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(scaledBitmap)
+        
+        // Use high-quality paint with bilinear filtering
+        val paint = Paint().apply {
+            isFilterBitmap = true
+            isAntiAlias = true
+            isDither = true
+        }
+        
+        val matrix = Matrix()
+        matrix.setScale(ratio, ratio)
+        canvas.drawBitmap(bitmap, matrix, paint)
+        
+        Log.d(TAG, "Scaled image from ${bitmap.width}x${bitmap.height} to ${maxWidth}x${newHeight}")
+        return scaledBitmap
+    }
+    
+    /**
+     * Enhance contrast for sharper thermal printer output
+     * Normalizes histogram to improve black/white separation
+     */
+    private fun enhanceContrast(bitmap: Bitmap): Bitmap {
+        val width = bitmap.width
+        val height = bitmap.height
+        
+        // Find min and max brightness values
+        var minBrightness = 255
+        var maxBrightness = 0
+        
+        for (y in 0 until height) {
+            for (x in 0 until width) {
+                val pixel = bitmap.getPixel(x, y)
+                val gray = (android.graphics.Color.red(pixel) * 0.299 +
+                        android.graphics.Color.green(pixel) * 0.587 +
+                        android.graphics.Color.blue(pixel) * 0.114).toInt()
+                minBrightness = minOf(minBrightness, gray)
+                maxBrightness = maxOf(maxBrightness, gray)
+            }
+        }
+        
+        // If contrast is already good, return original
+        val range = maxBrightness - minBrightness
+        if (range > 200) {
+            Log.d(TAG, "Image contrast is good (range: $range), skipping enhancement")
+            return bitmap
+        }
+        
+        // Create enhanced bitmap with stretched histogram
+        val enhancedBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val scale = if (range > 0) 255.0 / range else 1.0
+        
+        for (y in 0 until height) {
+            for (x in 0 until width) {
+                val pixel = bitmap.getPixel(x, y)
+                val r = android.graphics.Color.red(pixel)
+                val g = android.graphics.Color.green(pixel)
+                val b = android.graphics.Color.blue(pixel)
+                
+                // Stretch each channel
+                val newR = ((r - minBrightness) * scale).toInt().coerceIn(0, 255)
+                val newG = ((g - minBrightness) * scale).toInt().coerceIn(0, 255)
+                val newB = ((b - minBrightness) * scale).toInt().coerceIn(0, 255)
+                
+                enhancedBitmap.setPixel(x, y, android.graphics.Color.rgb(newR, newG, newB))
+            }
+        }
+        
+        Log.d(TAG, "Enhanced contrast: range $range -> 255 (scale: ${String.format("%.2f", scale)})")
+        return enhancedBitmap
+    }
+    
+    /**
      * Simple threshold conversion (faster but lower quality)
      */
     private fun convertToMonochrome(bitmap: Bitmap): Bitmap {
@@ -201,7 +312,7 @@ class ESCPOSCommandGenerator : PrinterCommandGenerator {
     
     /**
      * Convert bitmap to ESC/POS image format
-     * Uses ESC * m nL nH d1...dk format
+     * Uses ESC * m nL nH d1...dk format with zero line spacing for stripe-free output
      */
     private fun convertBitmapToESCPOS(bitmap: Bitmap): ByteArray {
         val outputStream = ByteArrayOutputStream()
@@ -210,6 +321,10 @@ class ESCPOSCommandGenerator : PrinterCommandGenerator {
         
         // Align center for better appearance
         outputStream.write(ALIGN_CENTER)
+        
+        // Set line spacing to zero - eliminates gaps/stripes between image strips
+        // ESC 3 n - Set line spacing to n/180 inch (n=0 for zero spacing)
+        outputStream.write(byteArrayOf(ESC, '3'.code.toByte(), 0))
         
         // Process image in 24-dot lines (3 bytes per column)
         var y = 0
@@ -246,6 +361,10 @@ class ESCPOSCommandGenerator : PrinterCommandGenerator {
             y += 24
         }
         
+        // Restore default line spacing - ESC 2 sets default spacing
+        // This ensures text printing after image is not affected
+        outputStream.write(byteArrayOf(ESC, '2'.code.toByte()))
+        
         // Reset alignment
         outputStream.write(ALIGN_LEFT)
         
@@ -264,4 +383,5 @@ class ESCPOSCommandGenerator : PrinterCommandGenerator {
         return outputStream.toByteArray()
     }
 }
+
 
