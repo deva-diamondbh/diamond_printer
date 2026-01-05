@@ -77,7 +77,8 @@ class ESCPOSCommandGenerator : PrinterCommandGenerator {
         outputStream.write(INIT)
         
         // Resize image to fit printer width using high-quality scaling
-        val resizedBitmap = if (bitmap.width > maxWidth) {
+        // Scale up if smaller, scale down if larger, to always fill paper width
+        val resizedBitmap = if (bitmap.width != maxWidth) {
             scaleWithHighQuality(bitmap, maxWidth)
         } else {
             bitmap

@@ -350,7 +350,7 @@ class DiamondPrinterPlugin :
         
         // Extract paper width from config (default to 640 dots for 80mm paper at 203 DPI)
         val paperWidthDots = configMap?.get("paperWidthDots") as? Int ?: 640
-        val maxImageWidth = (paperWidthDots * 0.9).toInt() // 90% to allow margins
+        val maxImageWidth = paperWidthDots // Use full width for edge-to-edge printing
         
         Log.d(TAG, "Printing image with paper width: ${paperWidthDots}dots (max image width: ${maxImageWidth}px)")
         

@@ -20,19 +20,29 @@ class ImageProcessor {
         )
     }
     
-    /// Resize image to fit within max dimensions while maintaining aspect ratio
+    /// Resize image to fit max dimensions while maintaining aspect ratio
+    /// Scales up if smaller, scales down if larger, to always fill the width
     static func resizeImage(_ image: UIImage, maxWidth: Int, maxHeight: Int) -> UIImage {
         let size = image.size
         
-        // If image is smaller than max dimensions, return original
-        if size.width <= CGFloat(maxWidth) && size.height <= CGFloat(maxHeight) {
+        // If image is exactly the target width, return original
+        if size.width == CGFloat(maxWidth) {
             return image
         }
         
         // Calculate new size maintaining aspect ratio
+        // Always scale to match maxWidth (scale up if smaller, scale down if larger)
         let widthRatio = CGFloat(maxWidth) / size.width
-        let heightRatio = CGFloat(maxHeight) / size.height
-        let ratio = min(widthRatio, heightRatio)
+        let newHeight = size.height * widthRatio
+        
+        // If scaled height exceeds maxHeight, use height ratio instead
+        let ratio: CGFloat
+        if newHeight > CGFloat(maxHeight) {
+            let heightRatio = CGFloat(maxHeight) / size.height
+            ratio = heightRatio
+        } else {
+            ratio = widthRatio
+        }
         
         let newSize = CGSize(width: size.width * ratio, height: size.height * ratio)
         

@@ -268,7 +268,7 @@ public class DiamondPrinterPlugin: NSObject, FlutterPlugin {
         // Extract config and calculate maxImageWidth
         let configMap = args["config"] as? [String: Any]
         let paperWidthDots = (configMap?["paperWidthDots"] as? Int) ?? 576
-        let maxImageWidth = Int(Double(paperWidthDots) * 0.9) // 90% to allow margins
+        let maxImageWidth = paperWidthDots // Use full width for edge-to-edge printing
         
         Logger.info("Paper width = \(paperWidthDots) dots, Max image width = \(maxImageWidth) dots", category: .imageProcessing)
         
@@ -387,7 +387,7 @@ public class DiamondPrinterPlugin: NSObject, FlutterPlugin {
         // Extract config and calculate maxImageWidth (default to 576)
         let configMap = args["config"] as? [String: Any]
         let paperWidthDots = (configMap?["paperWidthDots"] as? Int) ?? 576
-        let maxImageWidth = Int(Double(paperWidthDots) * 0.9) // 90% to allow margins
+        let maxImageWidth = paperWidthDots // Use full width for edge-to-edge printing
         
         DispatchQueue.global(qos: .userInitiated).async {
             guard let connectionManager = self.connectionManager else {

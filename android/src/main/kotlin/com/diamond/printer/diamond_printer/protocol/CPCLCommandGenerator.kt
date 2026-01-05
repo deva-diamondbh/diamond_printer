@@ -61,10 +61,15 @@ class CPCLCommandGenerator : PrinterCommandGenerator {
         Log.d(TAG, "Generating CPCL image for ${bitmap.width}x${bitmap.height}, maxWidth=$maxWidth")
         
         // Resize image to fit printer width
-        val resizedBitmap = if (bitmap.width > maxWidth) {
+        // Scale up if smaller, scale down if larger, to always fill paper width
+        val resizedBitmap = if (bitmap.width != maxWidth) {
             val ratio = maxWidth.toFloat() / bitmap.width
             val newHeight = (bitmap.height * ratio).toInt()
-            Log.d(TAG, "Resizing to ${maxWidth}x${newHeight}")
+            if (bitmap.width > maxWidth) {
+                Log.d(TAG, "Scaling down from ${bitmap.width}x${bitmap.height} to ${maxWidth}x$newHeight")
+            } else {
+                Log.d(TAG, "Scaling up from ${bitmap.width}x${bitmap.height} to ${maxWidth}x$newHeight to fit paper")
+            }
             Bitmap.createScaledBitmap(bitmap, maxWidth, newHeight, true)
         } else {
             bitmap
