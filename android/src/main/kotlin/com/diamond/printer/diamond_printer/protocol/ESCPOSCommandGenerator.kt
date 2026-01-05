@@ -319,8 +319,8 @@ class ESCPOSCommandGenerator : PrinterCommandGenerator {
         val width = bitmap.width
         val height = bitmap.height
         
-        // Align center for better appearance
-        outputStream.write(ALIGN_CENTER)
+        // Align left for full-width printing
+        outputStream.write(ALIGN_LEFT)
         
         // Set line spacing to zero - eliminates gaps/stripes between image strips
         // ESC 3 n - Set line spacing to n/180 inch (n=0 for zero spacing)

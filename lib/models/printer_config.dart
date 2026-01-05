@@ -6,8 +6,8 @@ class PrinterConfig {
   /// DPI (dots per inch) - usually 203 for thermal printers
   final int dpi;
   
-  /// Maximum image width in dots (auto-calculated from paperWidthDots with margins)
-  int get maxImageWidth => (paperWidthDots * 0.9).toInt(); // 90% to allow margins
+  /// Maximum image width in dots (uses full paper width)
+  int get maxImageWidth => paperWidthDots; // Use 100% for full-width printing
   
   const PrinterConfig({
     this.paperWidthDots = 576, // Default 3 inch (72mm)
