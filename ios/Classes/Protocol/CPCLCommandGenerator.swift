@@ -328,13 +328,8 @@ class CPCLCommandGenerator: PrinterCommandGenerator {
             }
             
         case .egCenter:
-            // CENTER command for better positioning
-            guard let centerData = "CENTER\r\n".data(using: .utf8) else {
-                Logger.error("Failed to encode CENTER command", category: .commandGeneration)
-                Logger.methodExit("convertImageToCPCL", success: false)
-                return nil
-            }
-            data.append(centerData)
+            // No CENTER command - print at full width from left edge
+            // Removed CENTER to allow edge-to-edge printing
             let hexData = convertBitmapToHex(adjustedBitmap)
             let commandLine = "EG \(finalBytesPerRow) \(finalHeight) 0 0 "
             let hexString = String(data: hexData, encoding: .utf8) ?? ""
