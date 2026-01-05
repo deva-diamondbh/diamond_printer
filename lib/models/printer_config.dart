@@ -6,7 +6,7 @@ class PrinterConfig {
   /// DPI (dots per inch) - usually 203 for thermal printers
   final int dpi;
   
-  /// Maximum image width in dots (uses full paper width)
+  /// Maximum image width in dots (uses full paper width for edge-to-edge printing)
   int get maxImageWidth => paperWidthDots; // Use 100% for full-width printing
   
   const PrinterConfig({

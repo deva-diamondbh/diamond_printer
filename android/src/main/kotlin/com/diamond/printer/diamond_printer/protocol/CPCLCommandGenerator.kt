@@ -148,7 +148,8 @@ class CPCLCommandGenerator : PrinterCommandGenerator {
         val labelHeight = height + 30
         output.write("! 0 200 200 $labelHeight 1\r\n".toByteArray())
         
-        // No CENTER command - print at full width from left edge
+        // CENTER command for better positioning
+        output.write("CENTER\r\n".toByteArray())
         
         // EXPANDED-GRAPHICS command with hex data
         output.write("EG $bytesPerRow $height 0 0 ".toByteArray())
@@ -356,7 +357,8 @@ class CPCLCommandGenerator : PrinterCommandGenerator {
         val labelHeight = height + 30
         output.write("! 0 200 200 $labelHeight 1\r\n".toByteArray())
         
-        // No CENTER command - print at full width from left edge
+        // CENTER for better appearance
+        output.write("CENTER\r\n".toByteArray())
         
         // EG command
         output.write("EG $bytesPerRow $height 0 0 ".toByteArray())

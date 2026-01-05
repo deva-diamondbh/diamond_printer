@@ -101,9 +101,9 @@ class AdvancedPrinter {
       final originalWidth = decodedImage.width;
       final maxWidth = config.maxImageWidth;
       
-      // If image fits within paper width, return original
-      if (originalWidth <= maxWidth) {
-        debugPrint('[diamond_printer] Image width ($originalWidth) fits within paper width ($maxWidth), no resizing needed');
+      // If image is exactly the paper width, return original
+      if (originalWidth == maxWidth) {
+        debugPrint('[diamond_printer] Image width ($originalWidth) matches paper width ($maxWidth), no resizing needed');
         return imageBytes;
       }
       
@@ -111,7 +111,12 @@ class AdvancedPrinter {
       final aspectRatio = decodedImage.height / decodedImage.width;
       final newHeight = (maxWidth * aspectRatio).toInt();
       
-      debugPrint('[diamond_printer] Resizing image from ${originalWidth}x${decodedImage.height} to ${maxWidth}x$newHeight to fit paper width');
+      // Resize if image is larger OR smaller than paper width
+      if (originalWidth > maxWidth) {
+        debugPrint('[diamond_printer] Image width ($originalWidth) is larger than paper width ($maxWidth), scaling down to ${maxWidth}x$newHeight');
+      } else {
+        debugPrint('[diamond_printer] Image width ($originalWidth) is smaller than paper width ($maxWidth), scaling up to ${maxWidth}x$newHeight to fit paper');
+      }
       
       // Resize image
       final resizedImage = img.copyResize(

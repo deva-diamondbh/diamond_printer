@@ -91,8 +91,8 @@ class ESCPOSCommandGenerator: PrinterCommandGenerator {
         guard height > 0 else { return data }
         let width = bitmap[0].count
         
-        // Left alignment for full-width printing
-        data.append(contentsOf: [ESC, 0x61, 0]) // ESC a 0 (LEFT)
+        // Center alignment
+        data.append(contentsOf: [ESC, 0x61, 1]) // ESC a 1
         
         // Set line spacing to zero - eliminates gaps/stripes between image strips
         // ESC 3 n - Set line spacing to n/180 inch (n=0 for zero spacing)
