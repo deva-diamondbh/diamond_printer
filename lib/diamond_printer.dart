@@ -99,11 +99,16 @@ class AdvancedPrinter {
       }
       
       final originalWidth = decodedImage.width;
+      final originalHeight = decodedImage.height;
       final maxWidth = config.maxImageWidth;
+      
+      debugPrint('[diamond_printer] 📐 RESIZE CHECK:');
+      debugPrint('[diamond_printer]   Original image: ${originalWidth}x${originalHeight} pixels');
+      debugPrint('[diamond_printer]   Target width: $maxWidth dots (${config.paperWidthMM.toStringAsFixed(1)}mm at ${config.dpi} DPI)');
       
       // If image is exactly the paper width, return original
       if (originalWidth == maxWidth) {
-        debugPrint('[diamond_printer] Image width ($originalWidth) matches paper width ($maxWidth), no resizing needed');
+        debugPrint('[diamond_printer] ✓ Image width ($originalWidth) matches paper width ($maxWidth), no resizing needed');
         return imageBytes;
       }
       
@@ -113,26 +118,31 @@ class AdvancedPrinter {
       
       // Resize if image is larger OR smaller than paper width
       if (originalWidth > maxWidth) {
-        debugPrint('[diamond_printer] Image width ($originalWidth) is larger than paper width ($maxWidth), scaling down to ${maxWidth}x$newHeight');
+        debugPrint('[diamond_printer] ⬇️ Image width ($originalWidth) is larger than paper width ($maxWidth), scaling DOWN to ${maxWidth}x$newHeight');
       } else {
-        debugPrint('[diamond_printer] Image width ($originalWidth) is smaller than paper width ($maxWidth), scaling up to ${maxWidth}x$newHeight to fit paper');
+        final scalePercent = ((maxWidth / originalWidth - 1) * 100).toStringAsFixed(1);
+        debugPrint('[diamond_printer] ⬆️ Image width ($originalWidth) is smaller than paper width ($maxWidth), scaling UP by $scalePercent% to ${maxWidth}x$newHeight');
       }
       
-      // Resize image
+      // Resize image with better interpolation for upscaling
+      final interpolation = originalWidth < maxWidth 
+          ? img.Interpolation.cubic // Better quality for upscaling
+          : img.Interpolation.linear; // Faster for downscaling
+      
       final resizedImage = img.copyResize(
         decodedImage,
         width: maxWidth,
         height: newHeight,
-        interpolation: img.Interpolation.linear,
+        interpolation: interpolation,
       );
       
       // Convert back to bytes (PNG format)
       final resizedBytes = Uint8List.fromList(img.encodePng(resizedImage));
-      debugPrint('[diamond_printer] Image resized successfully, new size: ${resizedBytes.length} bytes');
+      debugPrint('[diamond_printer] ✓ Image resized successfully: ${resizedImage.width}x${resizedImage.height} pixels, ${resizedBytes.length} bytes');
       
       return resizedBytes;
     } catch (e) {
-      debugPrint('[diamond_printer] Error resizing image: $e, using original bytes');
+      debugPrint('[diamond_printer] ❌ Error resizing image: $e, using original bytes');
       return imageBytes; // Return original if resize fails
     }
   }
