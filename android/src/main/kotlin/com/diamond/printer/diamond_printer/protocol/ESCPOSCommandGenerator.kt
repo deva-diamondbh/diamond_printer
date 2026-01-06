@@ -42,7 +42,7 @@ class ESCPOSCommandGenerator : PrinterCommandGenerator {
         private val LINE_FEED = byteArrayOf(LF)
     }
     
-    override fun generateTextCommand(text: String): ByteArray {
+    override fun generateTextCommand(text: String, alignment: String?): ByteArray {
         val outputStream = ByteArrayOutputStream()
         
         // Initialize printer
@@ -51,6 +51,14 @@ class ESCPOSCommandGenerator : PrinterCommandGenerator {
         // Set proper character encoding for international characters
         // ESC t n - Select character code table (n=28 for UTF-8 on most printers)
         outputStream.write(byteArrayOf(ESC, 't'.code.toByte(), 28))
+        
+        // Set alignment: ESC a n where n = 0 (left), 1 (center), 2 (right)
+        val alignValue: Byte = when ((alignment ?: "left").lowercase()) {
+            "center" -> 1
+            "right" -> 2
+            else -> 0 // left (default)
+        }
+        outputStream.write(byteArrayOf(ESC, 'a'.code.toByte(), alignValue))
         
         // Set optimal line spacing for text readability (30/180 inch ≈ 4.2mm)
         outputStream.write(byteArrayOf(ESC, '3'.code.toByte(), 30))
@@ -65,10 +73,13 @@ class ESCPOSCommandGenerator : PrinterCommandGenerator {
         // Restore default line spacing after text
         outputStream.write(byteArrayOf(ESC, '2'.code.toByte()))
         
+        // Reset to left alignment
+        outputStream.write(ALIGN_LEFT)
+        
         return outputStream.toByteArray()
     }
     
-    override fun generateImageCommand(bitmap: Bitmap, maxWidth: Int): ByteArray {
+    override fun generateImageCommand(bitmap: Bitmap, maxWidth: Int, alignment: String?): ByteArray {
         Log.d(TAG, "Generating ESC/POS image command for ${bitmap.width}x${bitmap.height}")
         
         val outputStream = ByteArrayOutputStream()
@@ -84,38 +95,56 @@ class ESCPOSCommandGenerator : PrinterCommandGenerator {
             bitmap
         }
         
+        // Safety check: ensure width doesn't exceed maxWidth (prevent right-side cutoff)
+        val finalBitmap = if (resizedBitmap.width > maxWidth) {
+            Log.w(TAG, "⚠️ Resized bitmap width (${resizedBitmap.width}) exceeds maxWidth ($maxWidth), scaling down again")
+            scaleWithHighQuality(resizedBitmap, maxWidth)
+        } else {
+            resizedBitmap
+        }
+        
+        // Final width check and logging - ensure width never exceeds maxWidth
+        Log.d(TAG, "Final bitmap dimensions: ${finalBitmap.width}x${finalBitmap.height}, maxWidth: $maxWidth")
+        if (finalBitmap.width > maxWidth) {
+            Log.e(TAG, "❌ ERROR: Final bitmap width (${finalBitmap.width}) still exceeds maxWidth ($maxWidth)! This will cause right-side cutoff.")
+            // Force resize to maxWidth as last resort
+            val correctedBitmap = scaleWithHighQuality(finalBitmap, maxWidth)
+            if (finalBitmap != correctedBitmap && finalBitmap != bitmap && finalBitmap != resizedBitmap) {
+                finalBitmap.recycle()
+            }
+            return generateImageCommand(correctedBitmap, maxWidth, alignment)
+        }
+        
         // Enhance contrast for sharper thermal printer output
-        val enhancedBitmap = enhanceContrast(resizedBitmap)
+        val enhancedBitmap = enhanceContrast(finalBitmap)
         
         // Convert bitmap to monochrome with dithering
         val monoImage = convertToMonochromeWithDithering(enhancedBitmap)
         
         // Clean up enhanced bitmap if it was created
-        if (enhancedBitmap != resizedBitmap) {
+        if (enhancedBitmap != finalBitmap) {
             enhancedBitmap.recycle()
         }
         
-        // Generate ESC/POS image command
-        val imageData = convertBitmapToESCPOS(monoImage)
+        // Generate ESC/POS image command - pass maxWidth and alignment
+        val imageData = convertBitmapToESCPOS(monoImage, maxWidth, alignment)
         outputStream.write(imageData)
         
-        // Clean up
-        if (resizedBitmap != bitmap) {
+        // Clean up bitmaps
+        if (finalBitmap != bitmap && finalBitmap != resizedBitmap) {
+            finalBitmap.recycle()
+        }
+        if (resizedBitmap != bitmap && resizedBitmap != finalBitmap) {
             resizedBitmap.recycle()
         }
         monoImage.recycle()
         
-        // Multiple line feeds - Bixolon printers need extra feeds to trigger printing
-        // This ensures the image buffer is flushed and printed
-        outputStream.write(generateFeedCommand(5))
+        // Single line feed to trigger printing (reduced from 8 to minimize bottom space)
+        outputStream.write(generateFeedCommand(1))
         
         // Form feed command (0x0C) - standard ESC/POS command to trigger printing
-        // This explicitly tells the printer to print the buffered data
         val FORM_FEED = 0x0C
         outputStream.write(FORM_FEED)
-        
-        // Additional line feeds to ensure printing completes
-        outputStream.write(generateFeedCommand(3))
         
         Log.d(TAG, "✓ Successfully encoded image (${outputStream.size()} bytes)")
         return outputStream.toByteArray()
@@ -314,14 +343,30 @@ class ESCPOSCommandGenerator : PrinterCommandGenerator {
     /**
      * Convert bitmap to ESC/POS image format
      * Uses ESC * m nL nH d1...dk format with zero line spacing for stripe-free output
+     * @param maxWidth Maximum width in pixels to prevent right-side cutoff
      */
-    private fun convertBitmapToESCPOS(bitmap: Bitmap): ByteArray {
+    private fun convertBitmapToESCPOS(bitmap: Bitmap, maxWidth: Int, alignment: String?): ByteArray {
         val outputStream = ByteArrayOutputStream()
-        val width = bitmap.width
+        // Clamp width to maxWidth to prevent right-side cutoff
+        val width = if (bitmap.width > maxWidth) {
+            Log.w(TAG, "⚠️ Bitmap width (${bitmap.width}) exceeds maxWidth ($maxWidth), clamping to prevent cutoff")
+            maxWidth
+        } else {
+            bitmap.width
+        }
         val height = bitmap.height
         
-        // Align center for better appearance
-        outputStream.write(ALIGN_CENTER)
+        // Log actual bitmap dimensions
+        Log.d(TAG, "Converting bitmap to ESC/POS: ${bitmap.width}x$height pixels (clamped to: ${width}x$height)")
+        
+        // Align left for full-width printing (no right-side cutoff)
+        // Set alignment: ESC a n where n = 0 (left), 1 (center), 2 (right)
+        val alignValue: Byte = when ((alignment ?: "left").lowercase()) {
+            "center" -> 1
+            "right" -> 2
+            else -> 0 // left (default)
+        }
+        outputStream.write(byteArrayOf(ESC, 'a'.code.toByte(), alignValue))
         
         // Set line spacing to zero - eliminates gaps/stripes between image strips
         // ESC 3 n - Set line spacing to n/180 inch (n=0 for zero spacing)
@@ -335,19 +380,23 @@ class ESCPOSCommandGenerator : PrinterCommandGenerator {
             outputStream.write('*'.code)
             outputStream.write(33) // 24-dot double-density mode
             
-            // Width in bytes (little-endian)
-            outputStream.write(width and 0xFF)
-            outputStream.write((width shr 8) and 0xFF)
+            // Width in pixels (little-endian) - use clamped width, never exceed maxWidth
+            val safeWidth = minOf(width, maxWidth, bitmap.width)
+            outputStream.write(safeWidth and 0xFF)
+            outputStream.write((safeWidth shr 8) and 0xFF)
             
-            // Process each column
-            for (x in 0 until width) {
+            Log.d(TAG, "Sending ESC/POS image strip: width=$safeWidth (maxWidth=$maxWidth, bitmap.width=${bitmap.width})")
+            
+            // Process each column (only up to safe width to prevent cutoff)
+            for (x in 0 until safeWidth) {
                 // Process 24 pixels (3 bytes) in this column
                 for (byteIndex in 0..2) {
                     var byteValue = 0
                     for (bit in 0..7) {
                         val pixelY = y + byteIndex * 8 + bit
                         if (pixelY < height) {
-                            val pixel = bitmap.getPixel(x, pixelY)
+                            // Only read pixel if within bitmap bounds
+                            val pixel = if (x < bitmap.width) bitmap.getPixel(x, pixelY) else 0xFFFFFF
                             // If pixel is black, set bit
                             if (android.graphics.Color.red(pixel) < 128) {
                                 byteValue = byteValue or (1 shl (7 - bit))

@@ -303,6 +303,7 @@ class DiamondPrinterPlugin :
     private fun handlePrintText(call: MethodCall, result: Result) {
         val text = call.argument<String>("text")
         val language = call.argument<String>("language") ?: "escpos"
+        val alignment = call.argument<String>("alignment")
         
         if (text == null) {
             result.error("INVALID_ARGUMENT", "Text cannot be null", null)
@@ -317,7 +318,7 @@ class DiamondPrinterPlugin :
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val commandGenerator = getCommandGenerator(language)
-                val command = commandGenerator.generateTextCommand(text)
+                val command = commandGenerator.generateTextCommand(text, alignment)
                 
                 connectionManager?.sendData(command)
                 
@@ -337,6 +338,7 @@ class DiamondPrinterPlugin :
         val imageBytes = call.argument<ByteArray>("imageBytes")
         val language = call.argument<String>("language") ?: "escpos"
         val configMap = call.argument<Map<String, Any>>("config")
+        val alignment = call.argument<String>("alignment") ?: configMap?.get("textAlignment") as? String
         
         if (imageBytes == null) {
             result.error("INVALID_ARGUMENT", "Image bytes cannot be null", null)
@@ -367,7 +369,7 @@ class DiamondPrinterPlugin :
                 }
                 
                 val commandGenerator = getCommandGenerator(language)
-                val command = commandGenerator.generateImageCommand(bitmap, maxImageWidth)
+                val command = commandGenerator.generateImageCommand(bitmap, maxImageWidth, alignment)
                 
                 connectionManager?.sendData(command)
                 
@@ -388,6 +390,7 @@ class DiamondPrinterPlugin :
     private fun handlePrintPdf(call: MethodCall, result: Result) {
         val filePath = call.argument<String>("filePath")
         val language = call.argument<String>("language") ?: "escpos"
+        val alignment = call.argument<String>("alignment")
         
         if (filePath == null) {
             result.error("INVALID_ARGUMENT", "File path cannot be null", null)
@@ -414,6 +417,9 @@ class DiamondPrinterPlugin :
                 val pdfRenderer = PdfRenderer(fileDescriptor)
                 val commandGenerator = getCommandGenerator(language)
                 
+                // Default maxWidth (576 dots for 3 inch at 203 DPI)
+                val defaultMaxWidth = 576
+                
                 // Render and print each page
                 for (pageIndex in 0 until pdfRenderer.pageCount) {
                     val page = pdfRenderer.openPage(pageIndex)
@@ -422,8 +428,11 @@ class DiamondPrinterPlugin :
                     val bitmap = Bitmap.createBitmap(page.width, page.height, Bitmap.Config.ARGB_8888)
                     page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT)
                     
-                    // Generate and send print command
-                    val command = commandGenerator.generateImageCommand(bitmap)
+                    // Use page width or default maxWidth, whichever is smaller
+                    val maxWidth = minOf(bitmap.width, defaultMaxWidth)
+                    
+                    // Generate and send print command with alignment
+                    val command = commandGenerator.generateImageCommand(bitmap, maxWidth, alignment)
                     connectionManager?.sendData(command)
                     
                     page.close()

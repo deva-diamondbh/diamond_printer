@@ -21,7 +21,7 @@ class CPCLCommandGenerator : PrinterCommandGenerator {
         private const val DEFAULT_HEIGHT = 400
     }
     
-    override fun generateTextCommand(text: String): ByteArray {
+    override fun generateTextCommand(text: String, alignment: String?): ByteArray {
         val outputStream = ByteArrayOutputStream()
         
         // Split text into lines
@@ -33,17 +33,32 @@ class CPCLCommandGenerator : PrinterCommandGenerator {
         val bottomMargin = 20
         val totalHeight = topMargin + (lines.size * lineHeight) + bottomMargin
         
+        // Use maxWidth from default or estimate (576 dots for 3 inch at 203 DPI)
+        val paperWidth = 576
+        
         // CPCL header
         // ! unit-type print-speed print-density label-height quantity
         outputStream.write("! 0 200 200 $totalHeight 1\r\n".toByteArray())
+        
+        // Determine alignment
+        val alignStr = (alignment ?: "left").lowercase()
         
         // Add each line as a separate TEXT command
         var yPosition = topMargin
         for (line in lines) {
             if (line.isNotEmpty()) {
+                // Calculate x position based on alignment
+                // Estimate text width: approximately 6 dots per character for font 4 (24pt)
+                val estimatedTextWidth = line.length * 6
+                val xPosition: Int = when (alignStr) {
+                    "center" -> maxOf(0, (paperWidth - estimatedTextWidth) / 2)
+                    "right" -> maxOf(0, paperWidth - estimatedTextWidth - 10) // 10 dot margin
+                    else -> 0 // left (default)
+                }
+                
                 // TEXT font rotation x y text
                 // Font: 0 = 8pt, 1 = 10pt, 2 = 12pt, 4 = 24pt, 7 = 14pt
-                outputStream.write("TEXT 4 0 0 $yPosition $line\r\n".toByteArray())
+                outputStream.write("TEXT 4 0 $xPosition $yPosition $line\r\n".toByteArray())
             }
             yPosition += lineHeight
         }
@@ -57,7 +72,7 @@ class CPCLCommandGenerator : PrinterCommandGenerator {
         return outputStream.toByteArray()
     }
     
-    override fun generateImageCommand(bitmap: Bitmap, maxWidth: Int): ByteArray {
+    override fun generateImageCommand(bitmap: Bitmap, maxWidth: Int, alignment: String?): ByteArray {
         Log.d(TAG, "Generating CPCL image for ${bitmap.width}x${bitmap.height}, maxWidth=$maxWidth")
         
         // Resize image to fit printer width
@@ -80,16 +95,24 @@ class CPCLCommandGenerator : PrinterCommandGenerator {
         val monoWidth = monoBitmap.width
         val monoHeight = monoBitmap.height
         
+        // Calculate x position based on alignment - always use LEFT for full-width printing
+        val alignStr = (alignment ?: "left").lowercase()
+        val xPosition: Int = when (alignStr) {
+            "center" -> maxOf(0, (maxWidth - monoWidth) / 2)
+            "right" -> maxOf(0, maxWidth - monoWidth - 10) // 10 dot margin
+            else -> 0 // left (default) - always use 0 for full-width printing
+        }
+        
         // Try MULTIPLE CPCL formats in order of compatibility
         // Different printers support different variations!
         val methods = listOf(
-            { generateExpandedGraphicsCenter(monoBitmap) } to "EG with CENTER (most compatible)",
-            { generateExpandedGraphics(monoBitmap) } to "EG standard",
-            { generateCG(monoBitmap) } to "CG (compressed graphics)",
-            { generateBinaryGraphicsZeroPos(monoBitmap) } to "GRAPHICS at 0,0",
-            { generateBinaryGraphics(monoBitmap) } to "GRAPHICS at 10,10",
-            { generateEGGraphics(monoBitmap) } to "EG alternate",
-            { generatePCX(monoBitmap) } to "PCX format (legacy)"
+            { generateExpandedGraphics(monoBitmap, xPosition) } to "EG standard (LEFT aligned)",
+            { generateExpandedGraphicsCenter(monoBitmap, xPosition, alignStr) } to "EG with CENTER (fallback)",
+            { generateCG(monoBitmap, xPosition) } to "CG (compressed graphics)",
+            { generateBinaryGraphicsZeroPos(monoBitmap, xPosition) } to "GRAPHICS at 0,0",
+            { generateBinaryGraphics(monoBitmap, xPosition) } to "GRAPHICS at 10,10",
+            { generateEGGraphics(monoBitmap, xPosition) } to "EG alternate",
+            { generatePCX(monoBitmap, xPosition) } to "PCX format (legacy)"
         )
         
         var result: ByteArray? = null
@@ -140,10 +163,10 @@ class CPCLCommandGenerator : PrinterCommandGenerator {
     }
     
     /**
-     * Method 1: EXPANDED-GRAPHICS with CENTER (maximum compatibility)
+     * Method 1: EXPANDED-GRAPHICS with CENTER (fallback for center alignment only)
      * Works on most Zebra mobile printers
      */
-    private fun generateExpandedGraphicsCenter(bitmap: Bitmap): ByteArray {
+    private fun generateExpandedGraphicsCenter(bitmap: Bitmap, xPosition: Int, alignment: String): ByteArray {
         val output = ByteArrayOutputStream()
         val width = bitmap.width
         val height = bitmap.height
@@ -153,11 +176,14 @@ class CPCLCommandGenerator : PrinterCommandGenerator {
         val labelHeight = height + 30
         output.write("! 0 200 200 $labelHeight 1\r\n".toByteArray())
         
-        // CENTER command for better positioning
-        output.write("CENTER\r\n".toByteArray())
-        
-        // EXPANDED-GRAPHICS command with hex data
-        output.write("EG $bytesPerRow $height 0 0 ".toByteArray())
+        // Use CENTER command only if explicitly center alignment, otherwise use x position (LEFT)
+        if (alignment == "center" && xPosition > 0) {
+            output.write("CENTER\r\n".toByteArray())
+            output.write("EG $bytesPerRow $height 0 0 ".toByteArray())
+        } else {
+            // EXPANDED-GRAPHICS command with x position for alignment (LEFT = 0)
+            output.write("EG $bytesPerRow $height $xPosition 0 ".toByteArray())
+        }
         
         // Convert to hex string
         for (y in 0 until height) {
@@ -188,7 +214,7 @@ class CPCLCommandGenerator : PrinterCommandGenerator {
      * Method 2: EXPANDED-GRAPHICS standard (most compatible for Zebra printers)
      * This uses ASCII hex encoding which is more reliable
      */
-    private fun generateExpandedGraphics(bitmap: Bitmap): ByteArray {
+    private fun generateExpandedGraphics(bitmap: Bitmap, xPosition: Int): ByteArray {
         val output = ByteArrayOutputStream()
         val width = bitmap.width
         val height = bitmap.height
@@ -198,8 +224,9 @@ class CPCLCommandGenerator : PrinterCommandGenerator {
         val labelHeight = height + 30
         output.write("! 0 200 200 $labelHeight 1\r\n".toByteArray())
         
-        // EXPANDED-GRAPHICS command with hex data
-        output.write("EG $bytesPerRow $height 10 10 ".toByteArray())
+        // EXPANDED-GRAPHICS command with hex data and x position (LEFT = 0 for full-width)
+        val xPos = maxOf(0, xPosition) // Use 0 for left alignment to print full width
+        output.write("EG $bytesPerRow $height $xPos 0 ".toByteArray())
         
         // Convert to hex string
         for (y in 0 until height) {
@@ -229,7 +256,7 @@ class CPCLCommandGenerator : PrinterCommandGenerator {
     /**
      * Method 3: CG (Compressed Graphics) - for printers supporting compression
      */
-    private fun generateCG(bitmap: Bitmap): ByteArray {
+    private fun generateCG(bitmap: Bitmap, xPosition: Int): ByteArray {
         val output = ByteArrayOutputStream()
         val width = bitmap.width
         val height = bitmap.height
@@ -239,8 +266,8 @@ class CPCLCommandGenerator : PrinterCommandGenerator {
         val labelHeight = height + 30
         output.write("! 0 200 200 $labelHeight 1\r\n".toByteArray())
         
-        // CG command (Compressed Graphics)
-        output.write("CG $bytesPerRow $height 0 0 ".toByteArray())
+        // CG command (Compressed Graphics) with x position for alignment
+        output.write("CG $bytesPerRow $height $xPosition 0 ".toByteArray())
         
         // Convert to hex with run-length encoding
         for (y in 0 until height) {
@@ -270,7 +297,7 @@ class CPCLCommandGenerator : PrinterCommandGenerator {
     /**
      * Method 4: GRAPHICS at position 0,0 (some printers only work with zero position)
      */
-    private fun generateBinaryGraphicsZeroPos(bitmap: Bitmap): ByteArray {
+    private fun generateBinaryGraphicsZeroPos(bitmap: Bitmap, xPosition: Int): ByteArray {
         val output = ByteArrayOutputStream()
         val width = bitmap.width
         val height = bitmap.height
@@ -280,8 +307,8 @@ class CPCLCommandGenerator : PrinterCommandGenerator {
         val labelHeight = height + 30
         output.write("! 0 200 200 $labelHeight 1\r\n".toByteArray())
         
-        // GRAPHICS command at 0,0
-        output.write("GRAPHICS $bytesPerRow $height 0 0\r\n".toByteArray())
+        // GRAPHICS command with x position for alignment
+        output.write("GRAPHICS $bytesPerRow $height $xPosition 0\r\n".toByteArray())
         
         // Binary data
         for (y in 0 until height) {
@@ -311,7 +338,7 @@ class CPCLCommandGenerator : PrinterCommandGenerator {
     /**
      * Method 5: GRAPHICS with binary data at 10,10 (faster but less compatible)
      */
-    private fun generateBinaryGraphics(bitmap: Bitmap): ByteArray {
+    private fun generateBinaryGraphics(bitmap: Bitmap, xPosition: Int): ByteArray {
         val output = ByteArrayOutputStream()
         val width = bitmap.width
         val height = bitmap.height
@@ -321,8 +348,9 @@ class CPCLCommandGenerator : PrinterCommandGenerator {
         val labelHeight = height + 30
         output.write("! 0 200 200 $labelHeight 1\r\n".toByteArray())
         
-        // GRAPHICS command
-        output.write("GRAPHICS $bytesPerRow $height 10 10\r\n".toByteArray())
+        // GRAPHICS command with x position for alignment (LEFT = 0 for full-width)
+        val xPos = maxOf(0, xPosition) // Use 0 for left alignment to print full width
+        output.write("GRAPHICS $bytesPerRow $height $xPos 0\r\n".toByteArray())
         
         // Binary data
         for (y in 0 until height) {
@@ -352,7 +380,7 @@ class CPCLCommandGenerator : PrinterCommandGenerator {
     /**
      * Method 6: EG (Extended Graphics) - alternate format
      */
-    private fun generateEGGraphics(bitmap: Bitmap): ByteArray {
+    private fun generateEGGraphics(bitmap: Bitmap, xPosition: Int): ByteArray {
         val output = ByteArrayOutputStream()
         val width = bitmap.width
         val height = bitmap.height
@@ -362,11 +390,9 @@ class CPCLCommandGenerator : PrinterCommandGenerator {
         val labelHeight = height + 30
         output.write("! 0 200 200 $labelHeight 1\r\n".toByteArray())
         
-        // CENTER for better appearance
-        output.write("CENTER\r\n".toByteArray())
-        
-        // EG command
-        output.write("EG $bytesPerRow $height 0 0 ".toByteArray())
+        // Use CENTER command only if explicitly center alignment, otherwise use x position (LEFT)
+        // Always use x position for LEFT alignment to ensure full-width printing
+        output.write("EG $bytesPerRow $height $xPosition 0 ".toByteArray())
         
         // Hex encoded data
         for (y in 0 until height) {
@@ -397,7 +423,7 @@ class CPCLCommandGenerator : PrinterCommandGenerator {
      * Method 7: PCX format (legacy printers)
      * Some older CPCL printers only support PCX
      */
-    private fun generatePCX(bitmap: Bitmap): ByteArray {
+    private fun generatePCX(bitmap: Bitmap, xPosition: Int): ByteArray {
         val output = ByteArrayOutputStream()
         val width = bitmap.width
         val height = bitmap.height
@@ -409,8 +435,8 @@ class CPCLCommandGenerator : PrinterCommandGenerator {
         // BARCODE-TEXT OFF to avoid interference
         output.write("BARCODE-TEXT OFF\r\n".toByteArray())
         
-        // PCX command (simpler format)
-        output.write("PCX $bytesPerRow $height 0 0\r\n".toByteArray())
+        // PCX command (simpler format) with x position for alignment
+        output.write("PCX $bytesPerRow $height $xPosition 0\r\n".toByteArray())
         
         // Binary image data
         for (y in 0 until height) {

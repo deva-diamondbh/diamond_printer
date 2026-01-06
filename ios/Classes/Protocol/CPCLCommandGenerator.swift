@@ -13,7 +13,7 @@ class CPCLCommandGenerator: PrinterCommandGenerator {
         case graphics
     }
     
-    func generateTextCommand(_ text: String) -> Data {
+    func generateTextCommand(_ text: String, alignment: String?) -> Data {
         var data = Data()
         
         // Split text into lines
@@ -25,17 +25,36 @@ class CPCLCommandGenerator: PrinterCommandGenerator {
         let bottomMargin = 20
         let totalHeight = topMargin + (lines.count * lineHeight) + bottomMargin
         
+        // Use maxWidth from default or estimate (576 dots for 3 inch at 203 DPI)
+        let paperWidth = 576
+        
         // CPCL header
         // ! unit-type print-speed print-density label-height quantity
         data.append("! 0 200 200 \(totalHeight) 1\r\n".data(using: .utf8)!)
+        
+        // Determine alignment
+        let alignStr = (alignment ?? "left").lowercased()
         
         // Add each line as a separate TEXT command
         var yPosition = topMargin
         for line in lines {
             if !line.isEmpty {
+                // Calculate x position based on alignment
+                // Estimate text width: approximately 6 dots per character for font 4 (24pt)
+                let estimatedTextWidth = line.count * 6
+                let xPosition: Int
+                
+                if alignStr == "center" {
+                    xPosition = max(0, (paperWidth - estimatedTextWidth) / 2)
+                } else if alignStr == "right" {
+                    xPosition = max(0, paperWidth - estimatedTextWidth - 10) // 10 dot margin
+                } else {
+                    xPosition = 0 // left (default)
+                }
+                
                 // TEXT font rotation x y text
                 // Font: 0 = 8pt, 1 = 10pt, 2 = 12pt, 4 = 24pt, 7 = 14pt
-                data.append("TEXT 4 0 0 \(yPosition) \(line)\r\n".data(using: .utf8)!)
+                data.append("TEXT 4 0 \(xPosition) \(yPosition) \(line)\r\n".data(using: .utf8)!)
             }
             yPosition += lineHeight
         }
@@ -47,7 +66,7 @@ class CPCLCommandGenerator: PrinterCommandGenerator {
         return data
     }
     
-    func generateImageCommand(_ image: UIImage, maxWidth: Int) -> Data {
+    func generateImageCommand(_ image: UIImage, maxWidth: Int, alignment: String?) -> Data {
         Logger.methodEntry("CPCL generateImageCommand", category: .commandGeneration)
         Logger.info("Original image size: \(Int(image.size.width))x\(Int(image.size.height)), target width: \(maxWidth)", category: .commandGeneration)
         
@@ -71,25 +90,25 @@ class CPCLCommandGenerator: PrinterCommandGenerator {
         var bitmapHeight = 0
         var usedFormat = "NONE"
         
-        // Try EG with CENTER format first (most compatible for many printers)
-        Logger.info("Attempting EG with CENTER format...", category: .commandGeneration)
-        if let (egCenterData, _, height) = convertImageToCPCL(image, format: .egCenter, targetWidth: maxWidth) {
-            imageData = egCenterData
+        // Try EG standard format first (LEFT aligned for full-width printing)
+        Logger.info("Attempting EG format (LEFT aligned)...", category: .commandGeneration)
+        if let (egData, _, height) = convertImageToCPCL(image, format: .eg, targetWidth: maxWidth, alignment: alignment) {
+            imageData = egData
             bitmapHeight = height
-            usedFormat = "EG_CENTER"
-            Logger.info("✓ SUCCESS - Using EG with CENTER format, bitmap height: \(height), data size: \(egCenterData.count) bytes", category: .commandGeneration)
+            usedFormat = "EG"
+            Logger.info("✓ SUCCESS - Using EG format (LEFT aligned), bitmap height: \(height), data size: \(egData.count) bytes", category: .commandGeneration)
         } else {
-            Logger.error("✗ FAILED - EG with CENTER format", category: .commandGeneration)
-            Logger.info("Attempting EG format...", category: .commandGeneration)
-            if let (egData, _, height) = convertImageToCPCL(image, format: .eg, targetWidth: maxWidth) {
-                imageData = egData
+            Logger.error("✗ FAILED - EG format", category: .commandGeneration)
+            Logger.info("Attempting EG with CENTER format (fallback)...", category: .commandGeneration)
+            if let (egCenterData, _, height) = convertImageToCPCL(image, format: .egCenter, targetWidth: maxWidth, alignment: alignment) {
+                imageData = egCenterData
                 bitmapHeight = height
-                usedFormat = "EG"
-                Logger.info("✓ SUCCESS - Using EG format, bitmap height: \(height), data size: \(egData.count) bytes", category: .commandGeneration)
+                usedFormat = "EG_CENTER"
+                Logger.info("✓ SUCCESS - Using EG with CENTER format, bitmap height: \(height), data size: \(egCenterData.count) bytes", category: .commandGeneration)
             } else {
-                Logger.error("✗ FAILED - EG format", category: .commandGeneration)
+                Logger.error("✗ FAILED - EG with CENTER format", category: .commandGeneration)
                 Logger.info("Attempting GRAPHICS format...", category: .commandGeneration)
-                if let (graphicsData, _, height) = convertImageToCPCL(image, format: .graphics, targetWidth: maxWidth) {
+                if let (graphicsData, _, height) = convertImageToCPCL(image, format: .graphics, targetWidth: maxWidth, alignment: alignment) {
                     imageData = graphicsData
                     bitmapHeight = height
                     usedFormat = "GRAPHICS"
@@ -191,7 +210,7 @@ class CPCLCommandGenerator: PrinterCommandGenerator {
         return data
     }
     
-    private func convertImageToCPCL(_ image: UIImage, format: CPCLImageFormat, targetWidth: Int) -> (Data, Int, Int)? {
+    private func convertImageToCPCL(_ image: UIImage, format: CPCLImageFormat, targetWidth: Int, alignment: String?) -> (Data, Int, Int)? {
         let formatName: String
         switch format {
         case .eg: formatName = "EG"
@@ -289,6 +308,17 @@ class CPCLCommandGenerator: PrinterCommandGenerator {
         
         Logger.info("Final bitmap dimensions: \(finalWidth)x\(finalHeight), bytesPerRow: \(finalBytesPerRow)", category: .imageProcessing)
         
+        // Calculate x position based on alignment - always use LEFT (0) for full-width printing
+        let alignStr = (alignment ?? "left").lowercased()
+        let xPosition: Int
+        if alignStr == "center" {
+            xPosition = max(0, (targetWidth - finalWidth) / 2)
+        } else if alignStr == "right" {
+            xPosition = max(0, targetWidth - finalWidth - 10) // 10 dot margin
+        } else {
+            xPosition = 0 // left (default) - always use 0 for full-width printing
+        }
+        
         switch format {
         case .eg:
             // EG command with hex encoding
@@ -298,7 +328,8 @@ class CPCLCommandGenerator: PrinterCommandGenerator {
             let hexString = String(data: hexData, encoding: .utf8) ?? ""
             
             // Check if hex data is too large - if so, put on separate line for better compatibility
-            let commandLine = "EG \(finalBytesPerRow) \(finalHeight) 10 10 "
+            let xPos = max(0, xPosition) // Use 0 for left alignment to print full width
+            let commandLine = "EG \(finalBytesPerRow) \(finalHeight) \(xPos) 0 "
             let commandWithHex = commandLine + hexString
             
             if commandWithHex.count > 1000 {
@@ -328,46 +359,76 @@ class CPCLCommandGenerator: PrinterCommandGenerator {
             }
             
         case .egCenter:
-            // CENTER command for better positioning
-            guard let centerData = "CENTER\r\n".data(using: .utf8) else {
-                Logger.error("Failed to encode CENTER command", category: .commandGeneration)
-                Logger.methodExit("convertImageToCPCL", success: false)
-                return nil
-            }
-            data.append(centerData)
+            // Use CENTER command only for center alignment, otherwise use x position
             let hexData = convertBitmapToHex(adjustedBitmap)
-            let commandLine = "EG \(finalBytesPerRow) \(finalHeight) 0 0 "
-            let hexString = String(data: hexData, encoding: .utf8) ?? ""
-            let commandWithHex = commandLine + hexString
-            
-            if commandWithHex.count > 1000 {
-                // Large image - put hex data on separate line
-                Logger.info("Using separate line format for large image with CENTER", category: .commandGeneration)
-                guard let cmdData = commandLine.data(using: .utf8),
-                      let newlineData = "\r\n".data(using: .utf8) else {
-                    Logger.error("Failed to encode command line", category: .commandGeneration)
+            if alignStr == "center" {
+                guard let centerData = "CENTER\r\n".data(using: .utf8) else {
+                    Logger.error("Failed to encode CENTER command", category: .commandGeneration)
                     Logger.methodExit("convertImageToCPCL", success: false)
                     return nil
                 }
-                data.append(cmdData)
-                data.append(newlineData)
-                data.append(hexData)
-                data.append(newlineData)
+                data.append(centerData)
+                let commandLine = "EG \(finalBytesPerRow) \(finalHeight) 0 0 "
+                let hexString = String(data: hexData, encoding: .utf8) ?? ""
+                let commandWithHex = commandLine + hexString
+                
+                if commandWithHex.count > 1000 {
+                    // Large image - put hex data on separate line
+                    Logger.info("Using separate line format for large image with CENTER", category: .commandGeneration)
+                    guard let cmdData = commandLine.data(using: .utf8),
+                          let newlineData = "\r\n".data(using: .utf8) else {
+                        Logger.error("Failed to encode command line", category: .commandGeneration)
+                        Logger.methodExit("convertImageToCPCL", success: false)
+                        return nil
+                    }
+                    data.append(cmdData)
+                    data.append(newlineData)
+                    data.append(hexData)
+                    data.append(newlineData)
+                } else {
+                    guard let cmdData = commandLine.data(using: .utf8),
+                          let newlineData = "\r\n".data(using: .utf8) else {
+                        Logger.error("Failed to encode command line", category: .commandGeneration)
+                        Logger.methodExit("convertImageToCPCL", success: false)
+                        return nil
+                    }
+                    data.append(cmdData)
+                    data.append(hexData)
+                    data.append(newlineData)
+                }
             } else {
-                guard let cmdData = commandLine.data(using: .utf8),
-                      let newlineData = "\r\n".data(using: .utf8) else {
-                    Logger.error("Failed to encode command line", category: .commandGeneration)
-                    Logger.methodExit("convertImageToCPCL", success: false)
-                    return nil
+                // Use x position for left/right alignment
+                let commandLine = "EG \(finalBytesPerRow) \(finalHeight) \(xPosition) 0 "
+                let hexString = String(data: hexData, encoding: .utf8) ?? ""
+                let commandWithHex = commandLine + hexString
+                
+                if commandWithHex.count > 1000 {
+                    guard let cmdData = commandLine.data(using: .utf8),
+                          let newlineData = "\r\n".data(using: .utf8) else {
+                        Logger.error("Failed to encode command line", category: .commandGeneration)
+                        Logger.methodExit("convertImageToCPCL", success: false)
+                        return nil
+                    }
+                    data.append(cmdData)
+                    data.append(newlineData)
+                    data.append(hexData)
+                    data.append(newlineData)
+                } else {
+                    guard let cmdData = commandLine.data(using: .utf8),
+                          let newlineData = "\r\n".data(using: .utf8) else {
+                        Logger.error("Failed to encode command line", category: .commandGeneration)
+                        Logger.methodExit("convertImageToCPCL", success: false)
+                        return nil
+                    }
+                    data.append(cmdData)
+                    data.append(hexData)
+                    data.append(newlineData)
                 }
-                data.append(cmdData)
-                data.append(hexData)
-                data.append(newlineData)
             }
             
         case .graphics:
-            // GRAPHICS command with binary data
-            let graphicsCmd = "GRAPHICS \(finalBytesPerRow) \(finalHeight) 0 0\r\n"
+            // GRAPHICS command with binary data and x position for alignment
+            let graphicsCmd = "GRAPHICS \(finalBytesPerRow) \(finalHeight) \(xPosition) 0\r\n"
             guard let graphicsData = graphicsCmd.data(using: .utf8),
                   let newlineData = "\r\n".data(using: .utf8) else {
                 Logger.error("Failed to encode GRAPHICS command", category: .commandGeneration)

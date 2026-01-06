@@ -190,6 +190,8 @@ public class DiamondPrinterPlugin: NSObject, FlutterPlugin {
             return
         }
         
+        let alignment = args["alignment"] as? String
+        
         DispatchQueue.global(qos: .userInitiated).async {
             guard let connectionManager = self.connectionManager else {
                 DispatchQueue.main.async {
@@ -199,7 +201,7 @@ public class DiamondPrinterPlugin: NSObject, FlutterPlugin {
             }
             
             let generator = self.getCommandGenerator(language)
-            let command = generator.generateTextCommand(text)
+            let command = generator.generateTextCommand(text, alignment: alignment)
             
             connectionManager.sendData(command) { sendResult in
                 DispatchQueue.main.async {
@@ -265,11 +267,14 @@ public class DiamondPrinterPlugin: NSObject, FlutterPlugin {
         
         Logger.info("Image decoded successfully - Size: \(Int(image.size.width))x\(Int(image.size.height))", category: .imageProcessing)
         
-        // Extract config and calculate maxImageWidth
+        // Extract config and calculate maxImageWidth (98% to account for hardware margins)
         let configMap = args["config"] as? [String: Any]
         let paperWidthDots = (configMap?["paperWidthDots"] as? Int) ?? 576
-        let maxImageWidth = paperWidthDots // Use full width for edge-to-edge printing
+        let maxImageWidth = Int(Double(paperWidthDots) * 0.98) // 98% to prevent right-side cutoff
         
+        // Extract alignment from args or config
+        let alignment = args["alignment"] as? String ?? configMap?["textAlignment"] as? String
+
         Logger.info("Paper width = \(paperWidthDots) dots, Max image width = \(maxImageWidth) dots", category: .imageProcessing)
         
         // Process image on background thread
@@ -297,7 +302,7 @@ public class DiamondPrinterPlugin: NSObject, FlutterPlugin {
                 Logger.info("Command generator type = \(type(of: generator))", category: .commandGeneration)
                 
                 Logger.info("Generating image command...", category: .commandGeneration)
-                let command = generator.generateImageCommand(image, maxWidth: maxImageWidth)
+                let command = generator.generateImageCommand(image, maxWidth: maxImageWidth, alignment: alignment)
                 
                 // Validate command
                 guard command.count > 0 else {
@@ -384,10 +389,13 @@ public class DiamondPrinterPlugin: NSObject, FlutterPlugin {
             return
         }
         
-        // Extract config and calculate maxImageWidth (default to 576)
+        // Extract config and calculate maxImageWidth (default to 576, 98% to account for hardware margins)
         let configMap = args["config"] as? [String: Any]
         let paperWidthDots = (configMap?["paperWidthDots"] as? Int) ?? 576
-        let maxImageWidth = paperWidthDots // Use full width for edge-to-edge printing
+        let maxImageWidth = Int(Double(paperWidthDots) * 0.98) // 98% to prevent right-side cutoff
+        
+        // Extract alignment
+        let alignment = args["alignment"] as? String
         
         DispatchQueue.global(qos: .userInitiated).async {
             guard let connectionManager = self.connectionManager else {
@@ -398,11 +406,11 @@ public class DiamondPrinterPlugin: NSObject, FlutterPlugin {
             }
             
             let generator = self.getCommandGenerator(language)
-            self.printPdfPages(pdfDocument: pdfDocument, generator: generator, maxImageWidth: maxImageWidth, connectionManager: connectionManager, pageIndex: 0, result: result)
+            self.printPdfPages(pdfDocument: pdfDocument, generator: generator, maxImageWidth: maxImageWidth, alignment: alignment, connectionManager: connectionManager, pageIndex: 0, result: result)
         }
     }
     
-    private func printPdfPages(pdfDocument: PDFDocument, generator: PrinterCommandGenerator, maxImageWidth: Int, connectionManager: ConnectionManager, pageIndex: Int, result: @escaping FlutterResult) {
+    private func printPdfPages(pdfDocument: PDFDocument, generator: PrinterCommandGenerator, maxImageWidth: Int, alignment: String?, connectionManager: ConnectionManager, pageIndex: Int, result: @escaping FlutterResult) {
         guard pageIndex < pdfDocument.pageCount else {
             DispatchQueue.main.async {
                 result(nil)
@@ -411,7 +419,7 @@ public class DiamondPrinterPlugin: NSObject, FlutterPlugin {
         }
         
         guard let page = pdfDocument.page(at: pageIndex) else {
-            printPdfPages(pdfDocument: pdfDocument, generator: generator, maxImageWidth: maxImageWidth, connectionManager: connectionManager, pageIndex: pageIndex + 1, result: result)
+            printPdfPages(pdfDocument: pdfDocument, generator: generator, maxImageWidth: maxImageWidth, alignment: alignment, connectionManager: connectionManager, pageIndex: pageIndex + 1, result: result)
             return
         }
         
@@ -426,7 +434,7 @@ public class DiamondPrinterPlugin: NSObject, FlutterPlugin {
             page.draw(with: .mediaBox, to: context.cgContext)
         }
         
-        let command = generator.generateImageCommand(image, maxWidth: maxImageWidth)
+        let command = generator.generateImageCommand(image, maxWidth: maxImageWidth, alignment: alignment)
         
         connectionManager.sendData(command) { [weak self] sendResult in
             guard let self = self else {
@@ -444,7 +452,7 @@ public class DiamondPrinterPlugin: NSObject, FlutterPlugin {
                     connectionManager.sendData(feedCommand) { feedResult in
                         switch feedResult {
                         case .success:
-                            self.printPdfPages(pdfDocument: pdfDocument, generator: generator, maxImageWidth: maxImageWidth, connectionManager: connectionManager, pageIndex: pageIndex + 1, result: result)
+                            self.printPdfPages(pdfDocument: pdfDocument, generator: generator, maxImageWidth: maxImageWidth, alignment: alignment, connectionManager: connectionManager, pageIndex: pageIndex + 1, result: result)
                         case .failure(let error):
                             let printerError = error as? PrinterError
                             let errorCode = printerError?.errorCode ?? "PRINT_ERROR"

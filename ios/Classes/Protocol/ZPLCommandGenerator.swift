@@ -4,7 +4,7 @@ import UIKit
 /// ZPL command generator for iOS
 class ZPLCommandGenerator: PrinterCommandGenerator {
     
-    func generateTextCommand(_ text: String) -> Data {
+    func generateTextCommand(_ text: String, alignment: String?) -> Data {
         var zpl = ""
         
         // Start label
@@ -13,8 +13,32 @@ class ZPLCommandGenerator: PrinterCommandGenerator {
         // Set label home position
         zpl += "^LH0,0\n"
         
-        // Field origin and text
-        zpl += "^FO50,50\n"
+        // Determine alignment and calculate x position
+        // Use dynamic width based on maxWidth for full-width printing
+        let labelWidth = 812 // Default, but will use maxWidth for images
+        let alignStr = (alignment ?? "left").lowercased()
+        
+        // Estimate text width (approximately 6 dots per character)
+        let estimatedTextWidth = text.count * 6
+        let xPosition: Int
+        
+        if alignStr == "center" {
+            xPosition = max(0, (labelWidth - estimatedTextWidth) / 2)
+        } else if alignStr == "right" {
+            xPosition = max(0, labelWidth - estimatedTextWidth - 10) // 10 dot margin
+        } else {
+            xPosition = 0 // left (default) - use 0 for full-width printing
+        }
+        
+        // Field origin (y position = 0 for full-width printing)
+        zpl += "^FO\(xPosition),0\n"
+        
+        // Field block for text wrapping and alignment
+        // ^FBwidth,height,spacing,alignment,0
+        let alignmentCode = alignStr == "center" ? "C" : (alignStr == "right" ? "R" : "L")
+        zpl += "^FB\(labelWidth - xPosition),1,0,\(alignmentCode),0\n"
+        
+        // Font and text
         zpl += "^A0N,30,30\n"
         zpl += "^FD\(text)^FS\n"
         
@@ -24,7 +48,7 @@ class ZPLCommandGenerator: PrinterCommandGenerator {
         return zpl.data(using: .utf8) ?? Data()
     }
     
-    func generateImageCommand(_ image: UIImage, maxWidth: Int) -> Data {
+    func generateImageCommand(_ image: UIImage, maxWidth: Int, alignment: String?) -> Data {
         var zpl = ""
         
         // Start label
@@ -33,8 +57,8 @@ class ZPLCommandGenerator: PrinterCommandGenerator {
         // Resize image if needed
         let resizedImage = ImageProcessor.resizeImage(image, maxWidth: maxWidth, maxHeight: 4096)
         
-        // Convert image to ZPL graphic field
-        if let graphicField = convertImageToZPL(resizedImage) {
+        // Convert image to ZPL graphic field with alignment
+        if let graphicField = convertImageToZPL(resizedImage, maxWidth: maxWidth, alignment: alignment) {
             zpl += graphicField
         }
         
@@ -58,7 +82,7 @@ class ZPLCommandGenerator: PrinterCommandGenerator {
         return zpl.data(using: .utf8) ?? Data()
     }
     
-    private func convertImageToZPL(_ image: UIImage) -> String? {
+    private func convertImageToZPL(_ image: UIImage, maxWidth: Int, alignment: String?) -> String? {
         // Use optimized image processor
         let config = ImageProcessor.Configuration(
             maxWidth: Int(image.size.width),
@@ -97,9 +121,23 @@ class ZPLCommandGenerator: PrinterCommandGenerator {
         // Compress hex data
         let compressed = compressZPLData(hexString)
         
+        // Calculate x position based on alignment - always use LEFT (0) for full-width printing
+        // Use maxWidth instead of hardcoded labelWidth for dynamic paper sizes
+        let labelWidth = maxWidth
+        let alignStr = (alignment ?? "left").lowercased()
+        let xPosition: Int
+        
+        if alignStr == "center" {
+            xPosition = max(0, (labelWidth - width) / 2)
+        } else if alignStr == "right" {
+            xPosition = max(0, labelWidth - width - 10) // 10 dot margin
+        } else {
+            xPosition = 0 // left (default) - use 0 for full-width printing
+        }
+        
         // Build ZPL graphic field
         var zpl = ""
-        zpl += "^FO50,50\n"
+        zpl += "^FO\(xPosition),0\n" // Field origin (y = 0 for full-width)
         zpl += "^GFA,"
         zpl += "\(totalBytes),"
         zpl += "\(totalBytes),"

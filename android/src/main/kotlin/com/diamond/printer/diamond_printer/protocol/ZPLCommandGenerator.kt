@@ -14,7 +14,7 @@ class ZPLCommandGenerator : PrinterCommandGenerator {
         private const val DEFAULT_DPI = 203
     }
     
-    override fun generateTextCommand(text: String): ByteArray {
+    override fun generateTextCommand(text: String, alignment: String?): ByteArray {
         val zpl = StringBuilder()
         
         // Start label
@@ -23,8 +23,32 @@ class ZPLCommandGenerator : PrinterCommandGenerator {
         // Set label home position
         zpl.append("^LH0,0\n")
         
-        // Field origin and text
-        zpl.append("^FO50,50\n")
+        // Determine alignment and calculate x position
+        // Use dynamic width based on maxWidth for full-width printing
+        val labelWidth = 812 // Default, but will use maxWidth for images
+        val alignStr = (alignment ?: "left").lowercase()
+        
+        // Estimate text width (approximately 6 dots per character)
+        val estimatedTextWidth = text.length * 6
+        val xPosition: Int = when (alignStr) {
+            "center" -> maxOf(0, (labelWidth - estimatedTextWidth) / 2)
+            "right" -> maxOf(0, labelWidth - estimatedTextWidth - 10) // 10 dot margin
+            else -> 0 // left (default) - use 0 for full-width printing
+        }
+        
+        // Field origin (y position = 0 for full-width printing)
+        zpl.append("^FO$xPosition,0\n")
+        
+        // Field block for text wrapping and alignment
+        // ^FBwidth,height,spacing,alignment,0
+        val alignmentCode = when (alignStr) {
+            "center" -> "C"
+            "right" -> "R"
+            else -> "L" // left (default)
+        }
+        zpl.append("^FB${labelWidth - xPosition},1,0,$alignmentCode,0\n")
+        
+        // Font and text
         zpl.append("^A0N,30,30\n") // Font, rotation, height, width
         zpl.append("^FD$text^FS\n")
         
@@ -34,14 +58,14 @@ class ZPLCommandGenerator : PrinterCommandGenerator {
         return zpl.toString().toByteArray()
     }
     
-    override fun generateImageCommand(bitmap: Bitmap, maxWidth: Int): ByteArray {
+    override fun generateImageCommand(bitmap: Bitmap, maxWidth: Int, alignment: String?): ByteArray {
         val zpl = StringBuilder()
         
         // Start label
         zpl.append("^XA\n")
         
-        // Convert bitmap to ZPL graphic field
-        val graphicField = convertBitmapToZPL(bitmap)
+        // Convert bitmap to ZPL graphic field with alignment
+        val graphicField = convertBitmapToZPL(bitmap, maxWidth, alignment)
         zpl.append(graphicField)
         
         // End label
@@ -70,7 +94,7 @@ class ZPLCommandGenerator : PrinterCommandGenerator {
      * Convert bitmap to ZPL graphic field format
      * Uses ^GFA (Graphic Field ASCII) command
      */
-    private fun convertBitmapToZPL(bitmap: Bitmap): String {
+    private fun convertBitmapToZPL(bitmap: Bitmap, maxWidth: Int, alignment: String?): String {
         val width = bitmap.width
         val height = bitmap.height
         
@@ -105,9 +129,19 @@ class ZPLCommandGenerator : PrinterCommandGenerator {
         // Compress hex data (simple run-length encoding)
         val compressedData = compressZPLData(hexData.toString())
         
+        // Calculate x position based on alignment - always use LEFT (0) for full-width printing
+        // Use maxWidth instead of hardcoded labelWidth for dynamic paper sizes
+        val labelWidth = maxWidth
+        val alignStr = (alignment ?: "left").lowercase()
+        val xPosition: Int = when (alignStr) {
+            "center" -> maxOf(0, (labelWidth - width) / 2)
+            "right" -> maxOf(0, labelWidth - width - 10) // 10 dot margin
+            else -> 0 // left (default) - use 0 for full-width printing
+        }
+        
         // Build ZPL graphic field command
         val zpl = StringBuilder()
-        zpl.append("^FO50,50\n") // Field origin
+        zpl.append("^FO$xPosition,0\n") // Field origin with alignment (y = 0 for full-width)
         zpl.append("^GFA,")
         zpl.append("$totalBytes,") // Total bytes
         zpl.append("$totalBytes,") // Bytes per row * rows

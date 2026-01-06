@@ -11,7 +11,7 @@ class ESCPOSCommandGenerator: PrinterCommandGenerator {
     private let LF: UInt8 = 0x0A
     private let CR: UInt8 = 0x0D
     
-    func generateTextCommand(_ text: String) -> Data {
+    func generateTextCommand(_ text: String, alignment: String?) -> Data {
         var data = Data()
         
         // Initialize printer
@@ -20,6 +20,18 @@ class ESCPOSCommandGenerator: PrinterCommandGenerator {
         // Set proper character encoding for international characters
         // ESC t n - Select character code table (n=28 for UTF-8)
         data.append(contentsOf: [ESC, 0x74, 28])
+        
+        // Set alignment: ESC a n where n = 0 (left), 1 (center), 2 (right)
+        let alignValue: UInt8
+        let alignStr = (alignment ?? "left").lowercased()
+        if alignStr == "center" {
+            alignValue = 1
+        } else if alignStr == "right" {
+            alignValue = 2
+        } else {
+            alignValue = 0 // left (default)
+        }
+        data.append(contentsOf: [ESC, 0x61, alignValue]) // ESC a n
         
         // Set optimal line spacing for text readability (30/180 inch)
         data.append(contentsOf: [ESC, 0x33, 30]) // ESC 3 30
@@ -35,10 +47,13 @@ class ESCPOSCommandGenerator: PrinterCommandGenerator {
         // Restore default line spacing
         data.append(contentsOf: [ESC, 0x32]) // ESC 2
         
+        // Reset to left alignment
+        data.append(contentsOf: [ESC, 0x61, 0]) // ESC a 0
+        
         return data
     }
     
-    func generateImageCommand(_ image: UIImage, maxWidth: Int) -> Data {
+    func generateImageCommand(_ image: UIImage, maxWidth: Int, alignment: String?) -> Data {
         var data = Data()
         
         // Initialize printer
@@ -58,12 +73,12 @@ class ESCPOSCommandGenerator: PrinterCommandGenerator {
             return data
         }
         
-        // Generate ESC/POS image data
-        let imageData = convertBitmapToESCPOS(bitmap)
+        // Generate ESC/POS image data - pass maxWidth and alignment
+        let imageData = convertBitmapToESCPOS(bitmap, maxWidth: maxWidth, alignment: alignment)
         data.append(imageData)
         
-        // Line feed
-        data.append(generateFeedCommand(lines: 3))
+        // Single line feed to minimize bottom space
+        data.append(generateFeedCommand(lines: 1))
         
         return data
     }
@@ -84,15 +99,31 @@ class ESCPOSCommandGenerator: PrinterCommandGenerator {
     
     
     /// Convert bitmap to ESC/POS format with zero line spacing for stripe-free output
-    private func convertBitmapToESCPOS(_ bitmap: [[Bool]]) -> Data {
+    /// @param maxWidth Maximum width in pixels to prevent right-side cutoff
+    /// @param alignment Text alignment: "left", "center", or "right"
+    private func convertBitmapToESCPOS(_ bitmap: [[Bool]], maxWidth: Int, alignment: String?) -> Data {
         var data = Data()
         
         let height = bitmap.count
         guard height > 0 else { return data }
-        let width = bitmap[0].count
+        let bitmapWidth = bitmap[0].count
         
-        // Center alignment
-        data.append(contentsOf: [ESC, 0x61, 1]) // ESC a 1
+        // Clamp width to maxWidth to prevent right-side cutoff
+        let width = min(bitmapWidth, maxWidth)
+        
+        Logger.info("Converting bitmap to ESC/POS: \(bitmapWidth)x\(height) pixels (clamped to: \(width)x\(height))", category: .commandGeneration)
+        
+        // Set alignment: ESC a n where n = 0 (left), 1 (center), 2 (right)
+        let alignValue: UInt8
+        let alignStr = (alignment ?? "left").lowercased()
+        if alignStr == "center" {
+            alignValue = 1
+        } else if alignStr == "right" {
+            alignValue = 2
+        } else {
+            alignValue = 0 // left (default)
+        }
+        data.append(contentsOf: [ESC, 0x61, alignValue]) // ESC a n
         
         // Set line spacing to zero - eliminates gaps/stripes between image strips
         // ESC 3 n - Set line spacing to n/180 inch (n=0 for zero spacing)
@@ -105,11 +136,11 @@ class ESCPOSCommandGenerator: PrinterCommandGenerator {
             data.append(0x2A) // *
             data.append(33) // 24-dot double-density mode
             
-            // Width (little-endian)
+            // Width (little-endian) - use clamped width
             data.append(UInt8(width & 0xFF))
             data.append(UInt8((width >> 8) & 0xFF))
             
-            // Process each column
+            // Process each column (only up to clamped width to prevent cutoff)
             for x in 0..<width {
                 // Process 24 pixels (3 bytes) in this column
                 for byteIndex in 0...2 {
@@ -132,7 +163,7 @@ class ESCPOSCommandGenerator: PrinterCommandGenerator {
         // This ensures text printing after image is not affected
         data.append(contentsOf: [ESC, 0x32]) // ESC 2
         
-        // Left alignment
+        // Reset to left alignment
         data.append(contentsOf: [ESC, 0x61, 0]) // ESC a 0
         
         return data
