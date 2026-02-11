@@ -38,8 +38,13 @@ class BluetoothConnectionManager(private val context: Context) : ConnectionManag
         // Chunk size and queue sleep time for reliable transmission
         // Based on esc_pos_bluetooth library approach (https://github.com/wwandreww/esc_pos_bluetooth)
         // Small chunks with sleep between prevents buffer overflow on slow printers
-        private const val CHUNK_SIZE = 512  // 512 bytes per chunk
-        private const val QUEUE_SLEEP_TIME_MS = 50L  // 50ms sleep between chunks (adjustable: 20-100ms)
+        //
+        // NOTE:
+        // 50ms sleep with 512B chunks makes large image jobs very slow over BT SPP
+        // (e.g. 200KB can take 20+ seconds just in sleeps). We default to a faster
+        // profile while still keeping a small delay to avoid buffer overruns.
+        private const val CHUNK_SIZE = 2048  // Larger chunks = fewer writes
+        private const val QUEUE_SLEEP_TIME_MS = 5L  // Small delay between chunks
     }
     
     override fun connect(address: String): Boolean {
@@ -275,7 +280,10 @@ class BluetoothConnectionManager(private val context: Context) : ConnectionManag
     }
     
     override fun sendData(data: ByteArray) {
-        sendDataWithQueueSleep(data, QUEUE_SLEEP_TIME_MS)
+        // For tiny payloads, no need to sleep between chunks.
+        // For large payloads (images), keep a small delay to avoid overruns.
+        val queueSleepTimeMs = if (data.size <= CHUNK_SIZE) 0L else QUEUE_SLEEP_TIME_MS
+        sendDataWithQueueSleep(data, queueSleepTimeMs)
     }
     
     /**
@@ -334,7 +342,9 @@ class BluetoothConnectionManager(private val context: Context) : ConnectionManag
                 }
                 
                 // Final delay for printer to finish processing
-                Thread.sleep(queueSleepTimeMs * 2)
+                if (queueSleepTimeMs > 0) {
+                    Thread.sleep(queueSleepTimeMs * 2)
+                }
                 
                 Log.d(TAG, "Sent ${data.size} bytes in $chunkCount chunks (${chunkSize}B each, ${queueSleepTimeMs}ms sleep)")
                 return // Success - exit retry loop
