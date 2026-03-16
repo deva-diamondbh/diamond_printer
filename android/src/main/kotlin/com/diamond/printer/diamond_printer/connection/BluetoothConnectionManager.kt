@@ -35,16 +35,21 @@ class BluetoothConnectionManager(private val context: Context) : ConnectionManag
         private val SPP_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
         private const val DISCOVERY_TIMEOUT = 15000L // 15 seconds
         
-        // Chunk size and queue sleep time for reliable transmission
-        // Based on esc_pos_bluetooth library approach (https://github.com/wwandreww/esc_pos_bluetooth)
-        // Small chunks with sleep between prevents buffer overflow on slow printers
-        //
-        // NOTE:
-        // 50ms sleep with 512B chunks makes large image jobs very slow over BT SPP
-        // (e.g. 200KB can take 20+ seconds just in sleeps). We default to a faster
-        // profile while still keeping a small delay to avoid buffer overruns.
-        private const val CHUNK_SIZE = 2048  // Larger chunks = fewer writes
-        private const val QUEUE_SLEEP_TIME_MS = 5L  // Small delay between chunks
+        // Chunk sizes and queue sleep times for reliable transmission.
+        // We use a more conservative profile for large payloads (images),
+        // especially for classic Bluetooth printers like Bixolon SPP-R310.
+        private const val SMALL_CHUNK_SIZE = 2048  // For small payloads (text, small commands)
+        private const val MEDIUM_CHUNK_SIZE = 1024 // For medium payloads
+        private const val LARGE_CHUNK_SIZE = 512   // For large payloads (images, PDFs)
+        
+        // Sleep profiles (in ms) between chunks depending on payload size.
+        private const val SLEEP_NONE_MS = 0L       // Tiny payloads: no delay
+        private const val SLEEP_MEDIUM_MS = 10L    // Medium payloads
+        private const val SLEEP_LARGE_MS = 25L     // Large payloads
+        
+        // Thresholds for selecting profiles
+        private const val SMALL_PAYLOAD_THRESHOLD = 4 * 1024      // 4KB
+        private const val MEDIUM_PAYLOAD_THRESHOLD = 64 * 1024    // 64KB
     }
     
     override fun connect(address: String): Boolean {
@@ -280,18 +285,33 @@ class BluetoothConnectionManager(private val context: Context) : ConnectionManag
     }
     
     override fun sendData(data: ByteArray) {
-        // For tiny payloads, no need to sleep between chunks.
-        // For large payloads (images), keep a small delay to avoid overruns.
-        val queueSleepTimeMs = if (data.size <= CHUNK_SIZE) 0L else QUEUE_SLEEP_TIME_MS
-        sendDataWithQueueSleep(data, queueSleepTimeMs)
+        // Select chunk size and sleep profile based on total payload size.
+        // Larger payloads are throttled more aggressively to avoid printer
+        // buffer overruns (which can manifest as only the first line/strip printing).
+        val (chunkSize, queueSleepTimeMs) = when {
+            data.size <= SMALL_PAYLOAD_THRESHOLD -> SMALL_CHUNK_SIZE to SLEEP_NONE_MS
+            data.size <= MEDIUM_PAYLOAD_THRESHOLD -> MEDIUM_CHUNK_SIZE to SLEEP_MEDIUM_MS
+            else -> LARGE_CHUNK_SIZE to SLEEP_LARGE_MS
+        }
+        
+        Log.d(
+            TAG,
+            "Preparing to send ${data.size} bytes (chunkSize=$chunkSize, sleep=${queueSleepTimeMs}ms)"
+        )
+        
+        sendDataWithQueueSleep(data, chunkSize, queueSleepTimeMs)
     }
     
     /**
-     * Send data with configurable queue sleep time between chunks
+     * Send data with configurable chunk size and queue sleep time between chunks
      * Similar to esc_pos_bluetooth library's queueSleepTimeMs approach
      * Reference: https://github.com/wwandreww/esc_pos_bluetooth
      */
-    private fun sendDataWithQueueSleep(data: ByteArray, queueSleepTimeMs: Long) {
+    private fun sendDataWithQueueSleep(
+        data: ByteArray,
+        chunkSize: Int,
+        queueSleepTimeMs: Long,
+    ) {
         var retryCount = 0
         val maxRetries = 3
         
@@ -315,11 +335,9 @@ class BluetoothConnectionManager(private val context: Context) : ConnectionManag
                     }
                 }
                 
-                val outputStream = this.outputStream ?: throw IllegalStateException("Output stream is null")
+                val outputStream = this.outputStream
+                    ?: throw IllegalStateException("Output stream is null")
                 
-                // Split data into chunks and send with sleep between each
-                // This approach is used by esc_pos_bluetooth library to handle slow printers
-                val chunkSize = CHUNK_SIZE
                 var offset = 0
                 var chunkCount = 0
                 

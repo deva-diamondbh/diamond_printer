@@ -429,6 +429,10 @@ Epson Original Standard, similar to ESC/POS.
 
 **Supports**: Text, images, barcodes, QR codes, paper cutting
 
+> **Bixolon SPP-R310 note:**  
+> This printer works best in POS/ESC-POS compatible mode when using `PrinterLanguage.escpos` or `PrinterLanguage.eos`.  
+> Make sure the printer’s firmware mode is set to POS (not CPCL/ZPL/label mode) in the Bixolon utility, and use an 80mm paper configuration (e.g. `PrinterConfig.mm80` with 203 DPI).
+
 ## Connection Types
 
 ### Bluetooth

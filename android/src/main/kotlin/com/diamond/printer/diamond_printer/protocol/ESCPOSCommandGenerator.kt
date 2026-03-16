@@ -139,12 +139,11 @@ class ESCPOSCommandGenerator : PrinterCommandGenerator {
         }
         monoImage.recycle()
         
-        // Single line feed to trigger printing (reduced from 8 to minimize bottom space)
-        outputStream.write(generateFeedCommand(1))
-        
-        // Form feed command (0x0C) - standard ESC/POS command to trigger printing
-        val FORM_FEED = 0x0C
-        outputStream.write(FORM_FEED)
+        // Add a few line feeds to ensure the printer flushes the image
+        // and advances paper enough that the full image is visible.
+        // Using only LF here avoids relying on form-feed (0x0C), which
+        // some devices interpret in non-standard ways.
+        outputStream.write(generateFeedCommand(4))
         
         Log.d(TAG, "✓ Successfully encoded image (${outputStream.size()} bytes)")
         return outputStream.toByteArray()
